@@ -1,0 +1,87 @@
+# gsforge default configuration. Delivery profiles in configs/profiles/*.yaml are deep-merged on top,
+# then GSFORGE__SECTION__KEY environment variables.
+
+storage:
+  backend: local            # local | s3 (S3-compatible: AWS, MinIO, OSS, COS via endpoint_url)
+  root: ./.gsforge/store
+  prefix: gsforge
+
+runtime:
+  backend: local            # local | ray
+  cpu_workers: 4
+  gpu_devices: []           # e.g. [0, 1]; GPU tools (tsdf_render, bake_from_capture) need at least one
+  max_concurrent_instances: 8
+  llm_concurrency: 8
+  workdir: ./.gsforge/work
+
+llm:
+  model: claude-opus-5-5
+  critic_model: claude-opus-5-5
+  effort: high
+  critic_effort: medium
+  max_tokens: 64000
+  server_side_fallback: true   # Claude API only; set false on Bedrock / Vertex / Foundry
+
+agent:
+  enabled: true
+  max_turns: 24
+  max_tool_calls: 60
+  max_cost_usd: 3.0          # per instance per stage
+  max_wall_s: 1800
+  preview_views: 6
+  allow_codegen: true
+  sandbox:
+    backend: subprocess      # use docker in production
+    timeout_s: 300
+
+geometry:
+  voxel_resolution: 192
+  target_faces: 60000
+  candidates: [density_mc, scene_mesh_crop, tsdf_render]   # unavailable ones are skipped
+
+texture:
+  size: 2048
+  prefer_capture_images: true
+
+export:
+  formats: [glb, ply, gaussians_ply]
+  collision: convex_hull
+  out_dir: ./.gsforge/deliveries
+
+# on_fail: agent (repair loop) | review (continue, flag for human) | fail (stop this instance)
+stages:
+  geometry: {on_fail: agent}
+  align: {on_fail: review}
+  texture: {on_fail: agent}
+  material: {on_fail: review}
+  physics: {on_fail: review}
+
+# stage -> metric -> rule. severity: hard blocks delivery, soft lowers the grade.
+qa:
+  split:
+    instance_count: {threshold: 1, comparator: ">=", severity: hard}
+    unassigned_ratio: {threshold: 0.05, comparator: "<=", severity: soft}
+  geometry:
+    watertight: {threshold: 1, comparator: ">=", severity: hard, detail: "closed surface required for mass/contacts"}
+    non_manifold_edges: {threshold: 0, comparator: "<=", severity: hard}
+    recall: {threshold: 0.85, comparator: ">=", severity: hard, detail: "share of gaussians within 1% diag of mesh"}
+    precision: {threshold: 0.80, comparator: ">=", severity: hard, detail: "share of mesh surface within 1% diag of gaussians"}
+    fscore: {threshold: 0.88, comparator: ">=", severity: soft}
+    components: {threshold: 1, comparator: "<=", severity: soft}
+    degenerate_faces: {threshold: 0, comparator: "<=", severity: soft}
+  align:
+    min_z: {threshold: -0.000001, comparator: ">=", severity: hard}
+    scale_plausibility: {threshold: 0.5, comparator: ">=", severity: soft, required: false}
+  texture:
+    texture_present: {threshold: 1, comparator: ">=", severity: hard}
+    generated_ratio: {threshold: 0.30, comparator: "<=", severity: soft}
+  critic:
+    critic_blocking_issues: {threshold: 0, comparator: "<=", severity: soft}
+    critic_completeness: {threshold: 0.7, comparator: ">=", severity: soft}
+  physics:
+    mass_kg: {threshold: 0.001, comparator: ">=", severity: hard}
+    collision_parts: {threshold: 1, comparator: ">=", severity: hard}
+    # MuJoCo drop test (only when mujoco is installed on the worker)
+    sim_settled: {threshold: 1, comparator: ">=", severity: hard, required: false}
+    sim_tilt_deg: {threshold: 15, comparator: "<=", severity: soft, required: false}
+    sim_sink_m: {threshold: 0.005, comparator: "<=", severity: soft, required: false}

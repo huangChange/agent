@@ -1,0 +1,7 @@
+# Simulation delivery: everything in default plus URDF / MJCF with convex-decomposed collision.
+export:
+  formats: [glb, ply, gaussians_ply, urdf, mjcf]
+  collision: coacd          # falls back to convex_hull if coacd is not installed
+qa:
+  geometry:
+    components: {threshold: 1, comparator: "<=", severity: hard}

@@ -1,0 +1,13 @@
+# Cloud production workers.
+storage:
+  backend: s3
+  root: /var/cache/gsforge   # local read-through cache
+  bucket: CHANGE_ME
+runtime:
+  backend: ray
+  max_concurrent_instances: 64
+  llm_concurrency: 32
+agent:
+  sandbox:
+    backend: docker
+    docker_image: gsforge-sandbox:0.1.0

@@ -1,0 +1,14 @@
+# PBR factors and physical properties per material class.
+# density in kg/m^3 is applied to the closed mesh volume; hollow objects (cups, boxes, cabinets)
+# use an effective density that accounts for typical wall thickness.
+wood: {roughness: 0.75, metallic: 0.0, density: 450, friction: 0.5}
+plastic: {roughness: 0.55, metallic: 0.0, density: 900, friction: 0.45}
+metal: {roughness: 0.35, metallic: 1.0, density: 1500, friction: 0.4}
+fabric: {roughness: 0.95, metallic: 0.0, density: 150, friction: 0.8}
+glass: {roughness: 0.05, metallic: 0.0, density: 900, friction: 0.3}
+ceramic: {roughness: 0.3, metallic: 0.0, density: 700, friction: 0.5}
+rubber: {roughness: 0.9, metallic: 0.0, density: 1100, friction: 0.9}
+paper: {roughness: 0.9, metallic: 0.0, density: 300, friction: 0.5}
+stone: {roughness: 0.6, metallic: 0.0, density: 2400, friction: 0.6}
+leather: {roughness: 0.6, metallic: 0.0, density: 400, friction: 0.7}
+mixed: {roughness: 0.7, metallic: 0.0, density: 500, friction: 0.5}

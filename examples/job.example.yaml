@@ -1,0 +1,21 @@
+# One job = one captured scene. Paths are relative to this file.
+job_id: living-room-0142
+scene_id: living_room_0142
+profile: sim                      # default | sim | production (configs/profiles)
+
+scene_gaussians: data/scene/point_cloud.ply        # full-scene 3DGS
+scene_mesh: data/scene/mesh.ply                     # optional; algorithmic, used as one geometry candidate
+up_axis: auto                                       # or +y / +z ... if the capture convention is known
+
+capture:                                            # optional but strongly recommended (sharp textures)
+  images_dir: data/capture/images
+  cameras: data/capture/transforms.json             # nerfstudio / instant-ngp convention
+  metric_scale: true                                # poses in meters (SLAM / ARKit)
+
+segments:                                           # segmented gaussian groups; one may hold several objects
+  - id: table
+    gaussians: data/segments/table.ply
+    label: table
+  - id: cabinet
+    gaussians: data/segments/cabinet.ply
+    label: cabinet
