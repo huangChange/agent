@@ -1,0 +1,1028 @@
+<title>高斯转 Mesh 生产方案</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: technical design doc. Sticky table of contents on the left, one reading column on the right.
+   Blue = observed geometry (trust what was captured), amber = completed geometry (trust the structural prior). Used the same way in every diagram. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --band: #eaeef4;
+  --fg: #18202d;
+  --muted: #5a6476;
+  --line: #d5dbe5;
+  --accent: #2753c4;      /* observed */
+  --accent-soft: #e3eafb;
+  --gen: #b86d0c;         /* completed */
+  --gen-soft: #fbefdc;
+  --ok: #2b7d48;
+  --crit: #b3261e;
+  --crit-soft: #fbe5e3;
+  --serif: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  --sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1218; --surface: #171b23; --band: #1d232d; --fg: #e3e7ee; --muted: #98a2b3; --line: #2b3240;
+    --accent: #7d9df2; --accent-soft: #1d2a4a; --gen: #e6a54a; --gen-soft: #3a2a12;
+    --ok: #63c084; --crit: #f0756c; --crit-soft: #3d1c1a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1218; --surface: #171b23; --band: #1d232d; --fg: #e3e7ee; --muted: #98a2b3; --line: #2b3240;
+  --accent: #7d9df2; --accent-soft: #1d2a4a; --gen: #e6a54a; --gen-soft: #3a2a12;
+  --ok: #63c084; --crit: #f0756c; --crit-soft: #3d1c1a; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--sans); font-size: 15px; line-height: 1.75;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 64px;
+}
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 48px; }
+nav.toc { position: sticky; top: env(safe-area-inset-top, 0px); align-self: start; padding-top: 40px; font-size: 13px; }
+nav.toc .k { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+nav.toc ol { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 2px; counter-reset: t; }
+nav.toc li { counter-increment: t; }
+nav.toc a { display: flex; gap: 8px; color: var(--muted); text-decoration: none; padding: 3px 0; }
+nav.toc a::before { content: counter(t, decimal-leading-zero); font-family: var(--mono); font-size: 11px; padding-top: 2px; color: var(--line); }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); }
+main { min-width: 0; padding-top: 40px; }
+
+header.doc { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 8px; }
+.meta { font-family: var(--mono); font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 18px; }
+h1 { font-family: var(--serif); font-size: clamp(28px, 4vw, 38px); line-height: 1.3; margin: 12px 0 14px; text-wrap: balance; }
+.lede { font-size: 16.5px; max-width: 44em; margin: 0; color: var(--fg); }
+h2 { font-family: var(--serif); font-size: 24px; line-height: 1.4; margin: 0 0 6px; text-wrap: balance; }
+h2 .n { font-family: var(--mono); font-size: 13px; color: var(--accent); font-weight: 500; display: block; letter-spacing: .06em; margin-bottom: 2px; }
+h3 { font-size: 16.5px; margin: 28px 0 6px; }
+section { padding-top: 48px; scroll-margin-top: 16px; }
+p, ul, ol { max-width: 46em; }
+p { margin: 10px 0; }
+ul, ol { padding-left: 1.3em; margin: 10px 0; }
+li { margin: 3px 0; }
+strong { font-weight: 700; }
+code { font-family: var(--mono); font-size: .88em; background: var(--band); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
+
+.obs { color: var(--accent); font-weight: 700; }
+.gen { color: var(--gen); font-weight: 700; }
+
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 24px; }
+.summary div { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.summary b { display: block; font-size: 14px; margin-bottom: 4px; }
+.summary span { font-size: 13.5px; color: var(--muted); line-height: 1.65; display: block; }
+
+.callout { border-left: 3px solid var(--crit); background: var(--crit-soft); padding: 12px 16px; border-radius: 0 6px 6px 0; max-width: 46em; margin: 16px 0; font-size: 14.5px; }
+.callout.info { border-color: var(--accent); background: var(--accent-soft); }
+.callout b { display: block; margin-bottom: 2px; }
+
+.tbl { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.6; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-weight: 500; font-size: 12.5px; color: var(--muted); background: var(--band); white-space: nowrap; }
+td:first-child { font-weight: 500; white-space: nowrap; }
+td.num { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.pill { display: inline-block; font-size: 12px; line-height: 1; padding: 4px 8px; border-radius: 99px; font-weight: 500; white-space: nowrap; }
+.pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.pill.no { color: var(--crit); background: var(--crit-soft); }
+.pill.mid { color: var(--gen); background: var(--gen-soft); }
+.pill.hard { color: var(--fg); background: var(--band); }
+
+figure { margin: 22px 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 18px 14px; }
+.svgbox { overflow-x: auto; }
+figure svg { display: block; width: 100%; height: auto; min-width: 680px; color: var(--fg); }
+figcaption { font-size: 13px; color: var(--muted); margin-top: 10px; max-width: 60em; }
+svg text { font-family: var(--sans); font-size: 12px; fill: var(--fg); }
+svg .t { font-size: 13px; font-weight: 700; }
+svg .s { font-size: 11.5px; fill: var(--muted); }
+svg .lab { font-size: 11px; fill: var(--muted); }
+svg .bandlab { font-family: var(--mono); font-size: 11px; fill: var(--muted); letter-spacing: .04em; }
+svg .band { fill: var(--band); }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+svg .box.hi { stroke: var(--accent); stroke-width: 1.6; }
+svg .box.agent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; }
+svg .box.human { fill: var(--gen-soft); stroke: var(--gen); stroke-width: 1.4; }
+svg .box.ext { fill: var(--surface); stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 5 3; }
+svg .gate { fill: var(--band); stroke: var(--muted); stroke-width: 1; }
+svg .ar { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+svg .ar.dash { stroke-dasharray: 4 3; }
+svg .ahead { fill: var(--muted); }
+svg .ln-obs { stroke: var(--accent); stroke-width: 5; fill: none; stroke-linecap: round; }
+svg .ln-gen { stroke: var(--gen); stroke-width: 5; fill: none; stroke-linecap: round; }
+svg .ln-cand { stroke: var(--gen); stroke-width: 2; fill: none; stroke-dasharray: 6 4; }
+svg .ln-miss { stroke: var(--muted); stroke-width: 1.4; fill: none; stroke-dasharray: 2 4; }
+svg .ln-env { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+svg .t-obs { fill: var(--accent); font-weight: 700; }
+svg .t-gen { fill: var(--gen); font-weight: 700; }
+
+pre { font-family: var(--mono); font-size: 12.5px; line-height: 1.65; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; margin: 14px 0; }
+pre .c { color: var(--muted); }
+
+.weeks { display: grid; gap: 10px; margin: 16px 0; }
+.week { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; }
+.week .d { font-family: var(--mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.week .d b { display: block; font-family: var(--sans); font-size: 14px; color: var(--fg); }
+.week ul { margin: 0; }
+
+.sources { font-size: 13px; }
+.sources li { word-break: break-word; }
+
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  nav.toc { display: none; }
+  .week { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+
+<div class="wrap">
+<nav class="toc" aria-label="目录">
+  <div class="k">目录</div>
+  <ol>
+    <li><a href="#status">现状与已确认信息</a></li>
+    <li><a href="#arch">系统架构</a></li>
+    <li><a href="#pipeline">单物体流水线</a></li>
+    <li><a href="#holes">遮挡洞：核心方案</a></li>
+    <li><a href="#category">按类别分流</a></li>
+    <li><a href="#split">实例拆分</a></li>
+    <li><a href="#texture">纹理</a></li>
+    <li><a href="#gates">质检门禁与指标</a></li>
+    <li><a href="#agent">Agent 修复回路</a></li>
+    <li><a href="#schema">资产规格与预留接口</a></li>
+    <li><a href="#license">许可证与合规</a></li>
+    <li><a href="#roadmap">排期与成本</a></li>
+    <li><a href="#framework">框架选型</a></li>
+    <li><a href="#review">方案评审与高可用</a></li>
+    <li><a href="#reqs">需求对照</a></li>
+    <li><a href="#open">团队问题清单</a></li>
+    <li><a href="#refs">参考资料</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="doc">
+  <div class="meta"><span>方案草案 v0.6</span><span>2026-11-03</span><span>范围：分割高斯 → 单物体仿真 mesh</span><span>模型接入：外部 GPT API，不部署 3D 生成模型</span><span>主力工具：Blender</span></div>
+  <h1>3DGS 转单物体 Mesh：生产方案</h1>
+  <p class="lede">目标是把原场景高斯、SLAM mesh 和分割后的物体高斯，稳定转换成<strong>完整、水密、尺度真实</strong>的单物体 mesh，供机器人仿真使用。当前最大的阻塞是遮挡洞。核心思路是<span class="obs">观测到的区域信观测</span>，<span class="gen">没观测到的区域按物体结构补全</span>：由 gpt-6-astra 理解物体结构并写 Blender 建模脚本，算法负责拟合和融合，最后由质检门禁和 agent 修复回路保证产出质量。</p>
+  <div class="summary">
+    <div><b>几何主路线</b><span>接触面直接封口，对称物体镜像补全，其余由 GPT 写参数化建模代码生成完整形状，再拟合到观测几何上。</span></div>
+    <div><b>Agent 的定位</b><span>流水线是确定性的。Agent 通过 GPT API 做诊断、结构理解和建模代码生成；最终是否通过由指标判定。</span></div>
+    <div><b>最紧急的事</b><span>查清内部高斯训练代码是否基于 Inria 官方代码；确认 gpt-6-astra 已在公司账号开通及其速率配额。</span></div>
+  </div>
+</header>
+
+<section id="status">
+  <h2><span class="n">01</span>现状与已确认信息</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>项目</th><th>现状</th><th>对方案的影响</th></tr></thead>
+    <tbody>
+      <tr><td>原始照片</td><td>没有，用高斯渲染图代替</td><td>纹理上限偏低，可以接受。也没有训练相机位姿，所以要用虚拟相机渲染，并靠高斯覆盖度估计哪些区域被观测过（见第 04 节）。</td></tr>
+      <tr><td>SLAM mesh</td><td>与高斯同坐标系；RGB-D，可能带激光；精度不稳定</td><td>只用作<strong>尺度基准、支撑面和墙面检测、粗形状约束</strong>，不当最终几何。传感器类型暂时不用确定，见下方说明。</td></tr>
+      <tr><td>高斯格式</td><td>原版 3DGS，内部训练，代码来源待确认</td><td><span class="pill no">需排查</span> 许可证风险，见第 11 节。</td></tr>
+      <tr><td>主要问题</td><td>遮挡洞</td><td>修复类算法补不出来，必须引入结构先验，这是本方案的重点。</td></tr>
+      <tr><td>模型接入</td><td>只通过外部 GPT API（如 gpt-6-astra），内部不部署任何模型</td><td>不使用 3D 生成模型。形状补全改为"封口 + 对称 + GPT 写参数化建模代码"。GPU 只用于高斯渲染和深度融合这类计算。</td></tr>
+      <tr><td>主力工具</td><td>团队主力使用 Blender</td><td>Blender 定为建模、修复、UV、烘焙、导出和 mesh 渲染的主力工具，以无界面脚本模式运行。manifold3d 只用于需要反复快速计算的参数拟合。</td></tr>
+      <tr><td>后续需求</td><td>PBR、碰撞体、物理属性以后要</td><td>现在只预留数据结构，但尺度、朝向、来源标记、UV 必须现在做对（见第 10 节）。</td></tr>
+      <tr><td>类别</td><td>杯子、柜子、桌子、椅子、沙发、花盆等，种类多</td><td>按几何特征分路线处理，不按单个类别写规则（见第 05 节）。</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>SLAM 传感器是 RGB-D 还是激光，影响大吗？</h3>
+  <p>在本方案里影响不大，可以先不定。SLAM mesh 不直接进入最终几何，只承担三件事：</p>
+  <ul>
+    <li><strong>米制尺度。</strong>两种传感器都是米制，都能用。</li>
+    <li><strong>支撑面和墙面检测。</strong>地面、桌面、墙面都是大平面，RGB-D 在这方面也足够可靠。接触面封口直接依赖这一步。</li>
+    <li><strong>粗形状约束。</strong>这里精度差异才明显。RGB-D 在深色、反光、细长物体上噪声大，激光在大平面和距离上更准。</li>
+  </ul>
+  <p>做法是不预设信任度，而是<strong>按物体自动算一个一致性分数</strong>：把 SLAM mesh 和高斯渲染深度做比对，吻合的区域给 SLAM 高权重，冲突的区域降权。传感器类型和扫描质量的差异会自动反映在权重里。</p>
+</section>
+
+<section id="arch">
+  <h2><span class="n">02</span>系统架构</h2>
+  <p>按资源类型分层。编排层负责"任务走到哪一步"，执行层按 CPU、GPU 计算、Blender 分池，各自独立扩缩容。所有大模型调用统一经过模型网关，再到外部 GPT API。早期不拆微服务，一个编排层加几个 worker 池就够了。</p>
+  <figure>
+    <div class="svgbox">
+    <svg viewBox="0 0 1000 600" role="img" aria-label="系统架构：接入层创建场景任务，Temporal 编排层把任务派发到按资源分池的执行层；Agent 服务通过模型网关调用外部 GPT API，GPT 生成的建模脚本在隔离的 Blender 池中执行；执行层读写对象存储和数据库，未通过的物体转人工复核，全部通过后打包交付。">
+      <defs>
+        <marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="ahead"/></marker>
+      </defs>
+      <rect class="band" x="20" y="16" width="740" height="92" rx="8"/>
+      <text class="bandlab" x="34" y="36">接入层</text>
+      <rect class="box" x="40" y="46" width="210" height="50" rx="6"/>
+      <text class="t" x="145" y="66" text-anchor="middle">场景数据包</text>
+      <text class="s" x="145" y="85" text-anchor="middle">原场景高斯 · SLAM mesh · 分割高斯</text>
+      <rect class="box" x="300" y="46" width="210" height="50" rx="6"/>
+      <text class="t" x="405" y="66" text-anchor="middle">接入校验与任务 API</text>
+      <text class="s" x="405" y="85" text-anchor="middle">坐标系 · 尺度 · 完整性检查</text>
+      <rect class="box" x="540" y="46" width="200" height="50" rx="6"/>
+      <text class="t" x="640" y="66" text-anchor="middle">交付导出</text>
+      <text class="s" x="640" y="85" text-anchor="middle">GLB · USD · URDF · 质检报告</text>
+      <line class="ar" x1="250" y1="71" x2="298" y2="71" marker-end="url(#ah)"/>
+
+      <rect class="band" x="20" y="130" width="740" height="92" rx="8"/>
+      <text class="bandlab" x="34" y="150">编排层 · Temporal 持久化工作流</text>
+      <rect class="box hi" x="40" y="160" width="700" height="50" rx="6"/>
+      <text class="t" x="390" y="181" text-anchor="middle">场景工作流 → 实例拆分 → 物体子工作流 × N（并行）→ 场景汇总</text>
+      <text class="s" x="390" y="200" text-anchor="middle">每步幂等 · 断点续跑 · 重试与超时 · API 配额 · 每物体修复预算</text>
+      <line class="ar" x1="405" y1="96" x2="405" y2="158" marker-end="url(#ah)"/>
+      <text class="lab" x="413" y="124">创建场景任务</text>
+      <line class="ar" x1="640" y1="160" x2="640" y2="98" marker-end="url(#ah)"/>
+      <text class="lab" x="648" y="124">全部通过后打包</text>
+
+      <rect class="band" x="20" y="244" width="740" height="176" rx="8"/>
+      <text class="bandlab" x="34" y="264">执行层 · 按资源类型分池，独立扩缩容</text>
+      <rect class="box" x="40" y="278" width="132" height="126" rx="6"/>
+      <text class="t" x="106" y="302" text-anchor="middle">CPU 处理池</text>
+      <text class="s" x="106" y="326" text-anchor="middle">高斯清理</text>
+      <text class="s" x="106" y="346" text-anchor="middle">对称拟合 · 参数拟合</text>
+      <text class="s" x="106" y="366" text-anchor="middle">非刚性形变</text>
+      <rect class="box" x="182" y="278" width="132" height="126" rx="6"/>
+      <text class="t" x="248" y="302" text-anchor="middle">GPU 计算池</text>
+      <text class="s" x="248" y="326" text-anchor="middle">gsplat 渲染</text>
+      <text class="s" x="248" y="346" text-anchor="middle">深度 / 法线</text>
+      <text class="s" x="248" y="366" text-anchor="middle">TSDF 融合</text>
+      <rect class="box hi" x="324" y="278" width="132" height="126" rx="6"/>
+      <text class="t" x="390" y="302" text-anchor="middle">Blender 池</text>
+      <text class="s" x="390" y="326" text-anchor="middle">执行建模脚本</text>
+      <text class="s" x="390" y="346" text-anchor="middle">修复 · UV · 烘焙 · 导出</text>
+      <text class="s" x="390" y="366" text-anchor="middle">隔离 · 断网 · 限时</text>
+      <rect class="box" x="466" y="278" width="132" height="126" rx="6"/>
+      <text class="t" x="532" y="302" text-anchor="middle">质检池</text>
+      <text class="s" x="532" y="326" text-anchor="middle">几何 / 外观指标</text>
+      <text class="s" x="532" y="346" text-anchor="middle">拓扑检查 · mesh 渲染</text>
+      <text class="s" x="532" y="366" text-anchor="middle">物理静置测试</text>
+      <rect class="box agent" x="608" y="278" width="132" height="126" rx="6"/>
+      <text class="t" x="674" y="302" text-anchor="middle">Agent 服务</text>
+      <text class="s" x="674" y="326" text-anchor="middle">结构理解 · 诊断</text>
+      <text class="s" x="674" y="346" text-anchor="middle">选择工具</text>
+      <text class="s" x="674" y="366" text-anchor="middle">写 Blender 建模脚本</text>
+      <line class="ar" x1="390" y1="210" x2="390" y2="276" marker-end="url(#ah)"/>
+      <text class="lab" x="398" y="238">派发 activity</text>
+      <line class="ar" x1="608" y1="390" x2="458" y2="390" marker-end="url(#ah)"/>
+      <text class="lab" x="533" y="414" text-anchor="middle">提交脚本</text>
+
+      <rect class="band" x="20" y="442" width="740" height="140" rx="8"/>
+      <text class="bandlab" x="34" y="462">存储层</text>
+      <rect class="box" x="40" y="476" width="220" height="90" rx="6"/>
+      <text class="t" x="150" y="500" text-anchor="middle">对象存储 S3 / MinIO</text>
+      <text class="s" x="150" y="524" text-anchor="middle">高斯 · 中间产物 · 最终资产</text>
+      <text class="s" x="150" y="544" text-anchor="middle">按 scene / object / version 组织</text>
+      <rect class="box" x="280" y="476" width="220" height="90" rx="6"/>
+      <text class="t" x="390" y="500" text-anchor="middle">PostgreSQL</text>
+      <text class="s" x="390" y="524" text-anchor="middle">任务状态 · 质检报告</text>
+      <text class="s" x="390" y="544" text-anchor="middle">修复轨迹 · 来源标记 · API 成本</text>
+      <rect class="box" x="520" y="476" width="220" height="90" rx="6"/>
+      <text class="t" x="630" y="500" text-anchor="middle">工具 · 模板 · 知识包</text>
+      <text class="s" x="630" y="524" text-anchor="middle">参数化工具 · 结构模板</text>
+      <text class="s" x="630" y="544" text-anchor="middle">建模规范与诊断手册（版本化）</text>
+      <line class="ar" x1="248" y1="404" x2="248" y2="474" marker-end="url(#ah)"/>
+      <text class="lab" x="256" y="436">读写产物</text>
+      <line class="ar" x1="674" y1="404" x2="674" y2="474" marker-end="url(#ah)"/>
+      <text class="lab" x="682" y="436">调用 / 沉淀</text>
+
+      <rect class="box human" x="790" y="160" width="190" height="64" rx="6"/>
+      <text class="t" x="885" y="184" text-anchor="middle">人工复核台</text>
+      <text class="s" x="885" y="204" text-anchor="middle">预算用尽或疑难样本</text>
+      <line class="ar" x1="740" y1="176" x2="788" y2="176" marker-end="url(#ah)"/>
+      <text class="lab" x="764" y="170" text-anchor="middle">转人工</text>
+      <line class="ar" x1="790" y1="202" x2="742" y2="202" marker-end="url(#ah)"/>
+      <text class="lab" x="764" y="218" text-anchor="middle">回流</text>
+      <rect class="box" x="790" y="270" width="190" height="60" rx="6"/>
+      <text class="t" x="885" y="294" text-anchor="middle">模型网关</text>
+      <text class="s" x="885" y="314" text-anchor="middle">多通道 · 限流 · 熔断 · 成本</text>
+      <line class="ar" x1="740" y1="300" x2="788" y2="300" marker-end="url(#ah)"/>
+      <rect class="box ext" x="790" y="360" width="190" height="60" rx="6"/>
+      <text class="t" x="885" y="384" text-anchor="middle">gpt-6-astra</text>
+      <text class="s" x="885" y="404" text-anchor="middle">OpenAI · Azure · Bedrock</text>
+      <line class="ar" x1="885" y1="330" x2="885" y2="358" marker-end="url(#ah)"/>
+      <rect class="box" x="790" y="476" width="190" height="90" rx="6"/>
+      <text class="t" x="885" y="500" text-anchor="middle">可观测性</text>
+      <text class="s" x="885" y="524" text-anchor="middle">指标 · 日志 · 链路</text>
+      <text class="s" x="885" y="544" text-anchor="middle">每物体质检与成本看板</text>
+    </svg>
+    </div>
+    <figcaption>图 1　系统架构。场景进入后由 Temporal 编排，拆分出的物体以子工作流并行执行。Agent 服务通过模型网关调用外部 gpt-6-astra（虚线框表示外部服务），模型网关同时接入 OpenAI、Azure、Bedrock 三个通道。GPT 写出的建模脚本交给本地隔离的 Blender 池执行，不在 OpenAI 托管环境里运行。门禁不通过的物体先交给 Agent 修复，预算用尽后转人工复核。</figcaption>
+  </figure>
+
+  <h3>工程要点</h3>
+  <ul>
+    <li><strong>编排用 Temporal</strong>：每个阶段写成幂等的 activity，中间产物落对象存储，失败只重跑当前阶段。</li>
+    <li><strong>按资源分池</strong>：CPU 池、GPU 计算池、Blender 池分开扩容，哪个池排队长就加哪个。</li>
+    <li><strong>Blender 池负责所有 mesh 操作</strong>：建模、修复、减面、UV、烘焙、导出、质检用的 mesh 渲染都在这里完成，以无界面脚本模式运行（<code>blender -b --python</code>）。GPT 写的建模脚本也在这里执行，所以 Blender 池同时就是沙箱，具体隔离措施见第 09 节。</li>
+    <li><strong>数据本地化</strong>：一个场景的高斯可能有几百 MB 到几 GB。同一个物体的连续几个阶段尽量固定在同一台机器上执行，节点本地缓存已下载的数据，阶段之间只传裁剪后的物体数据，不传整个场景。</li>
+    <li><strong>全链路可追溯</strong>：每个物体都能回答"用了哪个模型版本、哪段建模代码、哪组参数、花了多少 token、为什么通过或没通过"。</li>
+  </ul>
+
+  <h3>模型网关：所有 GPT 调用的统一出口</h3>
+  <p>全部依赖外部 API 时，高并发下最先卡住的往往是 API 的速率限制，而不是我们自己的算力。所以模型网关要做好这几件事：</p>
+  <ul>
+    <li><strong>限流与排队</strong>：按账号配额控制并发，超出的请求排队，不直接报错。</li>
+    <li><strong>多通道</strong>：gpt-6-astra 在 OpenAI、Azure、AWS Bedrock 上都能调用。网关同时接两到三个通道，一个限流或故障时自动切换到另一个。</li>
+    <li><strong>重试、熔断与降级</strong>：超时或限流时自动退避重试；错误率过高时熔断，暂停调用，避免把预算浪费在失败请求上；简单任务（比如数实例个数）可以降级到同系列更便宜的型号。</li>
+    <li><strong>缓存</strong>：同样的输入不重复调用；系统提示词和工具定义利用 API 的提示缓存，降低输入成本。</li>
+    <li><strong>成本记账</strong>：按场景、物体、阶段统计 token 和费用，作为排期与报价的依据。</li>
+    <li><strong>可替换</strong>：业务代码只调用网关，不直接调用 OpenAI SDK。以后换模型或换供应商，只改网关。</li>
+  </ul>
+</section>
+
+<section id="pipeline">
+  <h2><span class="n">03</span>单物体流水线</h2>
+  <p>六个阶段依次执行，每个阶段后面都有门禁。几何门禁不通过，就不进入纹理阶段。几何还不对就去烘焙纹理，后面怎么修都是错位的。</p>
+  <figure>
+    <div class="svgbox">
+    <svg viewBox="0 0 1000 300" role="img" aria-label="单物体流水线：实例拆分、观测几何、形状补全、拟合与融合、纹理烘焙、仿真化导出六个阶段，每个阶段后有门禁；门禁不通过时进入 Agent 修复回路，预算用尽转人工复核队列。">
+      <defs>
+        <marker id="ah2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="ahead"/></marker>
+      </defs>
+      <rect class="box" x="16" y="24" width="138" height="64" rx="6"/>
+      <text class="t" x="85" y="50" text-anchor="middle">1 实例拆分</text>
+      <text class="s" x="85" y="70" text-anchor="middle">平面 · 连通域 · GPT 校验</text>
+      <rect class="box" x="178" y="24" width="138" height="64" rx="6"/>
+      <text class="t" x="247" y="50" text-anchor="middle">2 观测几何</text>
+      <text class="s" x="247" y="70" text-anchor="middle">清理 · 渲染深度 · TSDF</text>
+      <rect class="box hi" x="340" y="24" width="138" height="64" rx="6"/>
+      <text class="t" x="409" y="50" text-anchor="middle">3 形状补全</text>
+      <text class="s" x="409" y="70" text-anchor="middle">封口 · 对称 · 程序化建模</text>
+      <rect class="box hi" x="502" y="24" width="138" height="64" rx="6"/>
+      <text class="t" x="571" y="50" text-anchor="middle">4 拟合与融合</text>
+      <text class="s" x="571" y="70" text-anchor="middle">参数优化 · 非刚性形变</text>
+      <rect class="box" x="664" y="24" width="138" height="64" rx="6"/>
+      <text class="t" x="733" y="50" text-anchor="middle">5 纹理烘焙</text>
+      <text class="s" x="733" y="70" text-anchor="middle">投影 · 镜像补全 · 调色</text>
+      <rect class="box" x="826" y="24" width="138" height="64" rx="6"/>
+      <text class="t" x="895" y="50" text-anchor="middle">6 仿真化导出</text>
+      <text class="s" x="895" y="70" text-anchor="middle">规范坐标 · 格式</text>
+      <line class="ar" x1="154" y1="56" x2="176" y2="56" marker-end="url(#ah2)"/>
+      <line class="ar" x1="316" y1="56" x2="338" y2="56" marker-end="url(#ah2)"/>
+      <line class="ar" x1="478" y1="56" x2="500" y2="56" marker-end="url(#ah2)"/>
+      <line class="ar" x1="640" y1="56" x2="662" y2="56" marker-end="url(#ah2)"/>
+      <line class="ar" x1="802" y1="56" x2="824" y2="56" marker-end="url(#ah2)"/>
+      <line class="ar" x1="85" y1="88" x2="85" y2="106"/>
+      <rect class="gate" x="55" y="106" width="60" height="24" rx="12"/>
+      <text class="lab" x="85" y="122" text-anchor="middle">门禁 G1</text>
+      <line class="ar" x1="247" y1="88" x2="247" y2="106"/>
+      <rect class="gate" x="217" y="106" width="60" height="24" rx="12"/>
+      <text class="lab" x="247" y="122" text-anchor="middle">门禁 G2</text>
+      <line class="ar" x1="409" y1="88" x2="409" y2="106"/>
+      <rect class="gate" x="379" y="106" width="60" height="24" rx="12"/>
+      <text class="lab" x="409" y="122" text-anchor="middle">门禁 G3</text>
+      <line class="ar" x1="571" y1="88" x2="571" y2="106"/>
+      <rect class="gate" x="541" y="106" width="60" height="24" rx="12"/>
+      <text class="lab" x="571" y="122" text-anchor="middle">门禁 G4</text>
+      <line class="ar" x1="733" y1="88" x2="733" y2="106"/>
+      <rect class="gate" x="703" y="106" width="60" height="24" rx="12"/>
+      <text class="lab" x="733" y="122" text-anchor="middle">门禁 G5</text>
+      <line class="ar" x1="895" y1="88" x2="895" y2="106"/>
+      <rect class="gate" x="865" y="106" width="60" height="24" rx="12"/>
+      <text class="lab" x="895" y="122" text-anchor="middle">门禁 G6</text>
+      <line class="ar dash" x1="85" y1="130" x2="85" y2="186" marker-end="url(#ah2)"/>
+      <line class="ar dash" x1="247" y1="130" x2="247" y2="186" marker-end="url(#ah2)"/>
+      <line class="ar dash" x1="409" y1="130" x2="409" y2="186" marker-end="url(#ah2)"/>
+      <line class="ar dash" x1="571" y1="130" x2="571" y2="186" marker-end="url(#ah2)"/>
+      <line class="ar dash" x1="733" y1="130" x2="733" y2="186" marker-end="url(#ah2)"/>
+      <text class="lab" x="93" y="164">未通过</text>
+      <rect class="box agent" x="16" y="188" width="770" height="92" rx="8"/>
+      <text class="t" x="36" y="214">Agent 修复回路（通过 GPT API）</text>
+      <text x="36" y="240">观察：指标 + 多视角渲染 → 诊断：GPT 归类问题 → 行动：① 调参重跑　② 换补全路线　③ 改写建模代码</text>
+      <text class="s" x="36" y="262">验证：修复后回到出错的阶段重跑，并重新通过同一个门禁，指标通过才算修好</text>
+      <rect class="box human" x="826" y="188" width="138" height="92" rx="8"/>
+      <text class="t" x="895" y="226" text-anchor="middle">人工复核队列</text>
+      <text class="s" x="895" y="248" text-anchor="middle">附带诊断记录</text>
+      <line class="ar" x1="786" y1="234" x2="824" y2="234" marker-end="url(#ah2)"/>
+      <text class="lab" x="806" y="226" text-anchor="middle">预算尽</text>
+      <line class="ar dash" x1="895" y1="130" x2="895" y2="186" marker-end="url(#ah2)"/>
+    </svg>
+    </div>
+    <figcaption>图 2　单物体流水线。阶段 3 和 4 是解决遮挡洞的关键（下一节展开）。G6 失败通常是导出规格问题，直接进人工队列。每个物体有修复预算，比如最多 3 轮修复、固定的 token 上限，超出就转人工，不会无限循环。</figcaption>
+  </figure>
+</section>
+
+<section id="holes">
+  <h2><span class="n">04</span>遮挡洞：核心方案</h2>
+  <p>遮挡洞的本质是<strong>那块表面从来没被拍到过</strong>，数据里没有任何信息。hole filling、Poisson 重建这类"修复"方法只能补出平面盖子或肿块，看起来就是半个物体。要补全，只能借助<span class="gen">对物体结构的理解</span>：这是一把四条腿的椅子、一个旋转对称的花盆、一个靠墙的柜子。</p>
+
+  <h3>gpt-6-astra 在这里能做什么，不能做什么</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>能力</th><th>情况</th><th>对我们的意义</th></tr></thead>
+    <tbody>
+      <tr><td>输入输出</td><td>官方文档：输入是文字和图像，输出是文字</td><td>不能直接输出 GLB、OBJ 等 3D 文件</td></tr>
+      <tr><td>空间理解</td><td>OpenAI 公布的 BenchCAD 测试：看多视角渲染图、写 CAD 代码重建 3D 物体，带工具时几何重合度 95.9%</td><td><strong>正好是我们要的能力</strong>：看高斯渲染图，写出完整物体的建模代码</td></tr>
+      <tr><td>规则几何</td><td>用户实测：规则几何、多面体做得很好</td><td>桌、柜、椅、杯、花盆这类家具和器物是强项</td></tr>
+      <tr><td>有机形状</td><td>用户实测：人、动物这类有机形状效果差，质量不如专门的 3D 生成模型</td><td>软装、植物要降低预期，或走其他兜底路线</td></tr>
+      <tr><td>成本</td><td>程序化建模通常要多轮迭代，token 消耗大</td><td>要靠模板沉淀控制成本，见第 12 节</td></tr>
+    </tbody>
+  </table></div>
+  <p>BenchCAD 是 OpenAI 自己公布的成绩，部分实测文章来自 3D 生成厂商，所以实际效果要在我们自己的测试集上验证。</p>
+
+  <h3>补全顺序：能用简单方法就不用复杂方法</h3>
+  <ol>
+    <li><strong>接触面封口。</strong>柜子底面贴地、背面贴墙，桌上物体的底面。这些面在现实中大多本来就是平的，沿检测到的支撑面或墙面封口就是正确结果。零 token 成本，结果最稳定。</li>
+    <li><strong>对称补全。</strong>GPT 看多视角渲染图，判断对称类型（左右镜像、旋转对称）和大致对称轴；算法精确拟合对称轴后，把观测到的部分镜像过去，或者把轮廓旋转成完整曲面。</li>
+    <li><strong>程序化建模。</strong>前两步补不全的情况，由 GPT 判断部件结构（比如"四条腿 + 座面 + 靠背"），写出调用我们建模工具库的参数化建模代码，在沙箱中执行，得到完整、水密的形状。</li>
+  </ol>
+  <p>只有非接触面上的隐藏区域（沙发靠背的背面、椅背后侧、被其他物体挡住的侧面）才会造成"半个物体"的感觉，需要走第 2 或第 3 步。</p>
+
+  <h3>关键决策：以补全模型为拓扑载体，向观测几何形变</h3>
+  <p>"观测 mesh + 补全 mesh 拼接"的做法接缝处极难处理，容易出现台阶、重叠面和非流形边。本方案反过来做：</p>
+  <ol>
+    <li>先由封口、对称或程序化建模得到一个<strong>完整、水密</strong>的候选形状；</li>
+    <li>用参数优化把它拟合到观测几何上，比如调整程序化模型的尺寸参数；</li>
+    <li>再做<strong>非刚性形变</strong>，观测区域贴到观测表面上，遮挡区域保持补全的形状。</li>
+  </ol>
+  <p>这样拓扑始终来自完整的候选模型，天然水密、无接缝。观测数据只负责修正形状，不负责构造拓扑。</p>
+
+  <figure>
+    <div class="svgbox">
+    <svg viewBox="0 0 960 290" role="img" aria-label="以靠墙放在地面上的柜子剖面为例：第一步只观测到正面和顶面；第二步 GPT 识别为箱体，生成参数化模型并拟合尺寸；第三步非刚性形变，观测区贴合观测，背面和底面按墙面与地面封口。">
+      <text class="t" x="20" y="22">① 观测几何：只有正面和顶面</text>
+      <line class="ln-env" x1="260" y1="40" x2="260" y2="226"/>
+      <line class="ln-env" x1="20" y1="226" x2="290" y2="226"/>
+      <text class="lab" x="268" y="56">墙</text>
+      <text class="lab" x="24" y="244">地面</text>
+      <polyline class="ln-obs" points="80,224 80,86 258,86"/>
+      <line class="ln-miss" x1="256" y1="90" x2="256" y2="222"/>
+      <line class="ln-miss" x1="84" y1="222" x2="254" y2="222"/>
+      <text class="lab" x="170" y="150" text-anchor="middle">背面贴墙、底面贴地</text>
+      <text class="lab" x="170" y="168" text-anchor="middle">从未被拍到</text>
+
+      <text class="t" x="340" y="22">② GPT 识别为箱体，参数化建模</text>
+      <line class="ln-env" x1="580" y1="40" x2="580" y2="226"/>
+      <line class="ln-env" x1="340" y1="226" x2="610" y2="226"/>
+      <polyline class="ln-obs" points="400,224 400,86 578,86"/>
+      <rect class="ln-cand" x="414" y="98" width="150" height="120" rx="3"/>
+      <text class="lab" x="489" y="150" text-anchor="middle">参数：宽 · 高 · 深</text>
+      <text class="lab" x="489" y="168" text-anchor="middle">优化到贴合观测</text>
+
+      <text class="t" x="660" y="22">③ 形变贴合观测，接触面封口</text>
+      <line class="ln-env" x1="900" y1="40" x2="900" y2="226"/>
+      <line class="ln-env" x1="660" y1="226" x2="930" y2="226"/>
+      <polyline class="ln-obs" points="720,223 720,86 897,86"/>
+      <line class="ln-gen" x1="897" y1="86" x2="897" y2="223"/>
+      <line class="ln-gen" x1="720" y1="223" x2="897" y2="223"/>
+      <text class="lab" x="890" y="160" text-anchor="end">贴墙约束</text>
+      <text class="lab" x="808" y="212" text-anchor="middle">贴地约束</text>
+
+      <line class="ln-obs" x1="20" y1="276" x2="48" y2="276"/>
+      <text x="56" y="280" class="t-obs">观测区：信观测</text>
+      <line class="ln-gen" x1="200" y1="276" x2="228" y2="276"/>
+      <text x="236" y="280" class="t-gen">补全区：信结构先验</text>
+      <line class="ln-cand" x1="400" y1="276" x2="428" y2="276"/>
+      <text x="436" y="280" class="s">参数化候选（拟合前）</text>
+      <line class="ln-miss" x1="600" y1="276" x2="628" y2="276"/>
+      <text x="636" y="280" class="s">缺失表面</text>
+    </svg>
+    </div>
+    <figcaption>图 3　以靠墙放在地面上的柜子剖面为例。柜子的背面和底面都是接触面，这种情况封口就是正确答案。最终 mesh 的每个面片都带有"观测 / 补全"来源标记，后续质检和交付说明都会用到。</figcaption>
+  </figure>
+
+  <h3>步骤拆解</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>步骤</th><th>做法</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td>A 高斯清理</td><td>按不透明度、尺度异常、离群统计剔除漂浮物；用 SLAM mesh 包围盒裁剪</td><td>漂浮物是后面拟合失败的主要来源</td></tr>
+      <tr><td>B 虚拟相机</td><td>在支撑面上方的半球面上布置虚拟相机，用 SLAM mesh 做射线检测，剔除被墙或其他物体挡住的视角</td><td>没有训练位姿，只能这样做。偏离训练视角太远时渲染质量会下降，所以要按清晰度和不透明度覆盖率给视角打分</td></tr>
+      <tr><td>C 观测几何</td><td>gsplat 渲染中位深度和法线，TSDF 融合出部分表面</td><td>只保留高置信区域，不追求完整</td></tr>
+      <tr><td>D 可见性与洞分类</td><td>表面附近有高不透明度高斯且法线一致，判为已观测；靠近支撑面或墙面的缺失区判为<strong>接触洞</strong>，其余缺失区判为<strong>隐藏洞</strong></td><td>决定每块区域走哪条补全路线，是整套方案的关键</td></tr>
+      <tr><td>E 结构理解</td><td>把 4 到 6 张多视角渲染图和观测几何的统计信息（包围盒尺寸、主平面、截面轮廓）发给 GPT，返回结构化结果：类别、部件、对称类型、关键尺寸</td><td>要求 GPT 输出固定格式的 JSON，方便程序校验，不接受自由文本</td></tr>
+      <tr><td>F 补全</td><td>按"封口 → 对称 → 程序化建模"的顺序尝试。程序化建模时，GPT 优先从模板库选模板并只给参数；没有合适模板才写新代码</td><td>建模代码只能调用我们封装的建模库，保证输出是流形</td></tr>
+      <tr><td>G 拟合选优</td><td>优化参数，让候选贴合观测。打分用<strong>单向</strong>的"观测→候选"距离，加上多视角轮廓 IoU</td><td>只能用单向距离：候选比观测多出来的部分正是要补的，不能被惩罚</td></tr>
+      <tr><td>H 非刚性形变</td><td>ARAP 或嵌入式形变图，对应点按观测置信度加权；加接触约束：底面落在支撑面上，背面贴墙</td><td>形变要有正则，防止把观测噪声也拉进来</td></tr>
+      <tr><td>I 拓扑清理</td><td>去自交、去小连通分量、按面数预算减面、水密检查</td><td>程序化模型本身是水密的，这一步主要是保险</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Blender 建模原语库：GPT 写的脚本只能调用这些</h3>
+  <p>不让 GPT 直接写原生的 bpy 代码。bpy 依赖很多"当前状态"（选中了哪个物体、处在哪种编辑模式），代码写对了也可能因为状态不对而失败。我们在 Blender 上封装一层建模原语，GPT 只能调用这一层，比如 <code>make_box(w, d, h, bevel)</code>、<code>make_leg(length, radius)</code>、<code>lathe(profile)</code>。这样脚本短、出错少、结果可校验：</p>
+  <ul>
+    <li><strong>基本体</strong>：长方体、圆柱、圆台、圆角盒、球。</li>
+    <li><strong>成形操作</strong>：旋转体（轮廓绕轴旋转）、拉伸、沿路径扫掠、放样。</li>
+    <li><strong>组合操作</strong>：布尔并、差、交（使用 Blender 4.5 起提供的 Manifold 求解器，保证结果是流形），镜像、阵列（比如四条桌腿）。</li>
+    <li><strong>造型修饰</strong>：倒角、细分曲面、平滑。沙发、抱枕这类软体主要靠这些操作，这也是选 Blender 的重要原因。</li>
+    <li><strong>从观测取数</strong>：提取截面轮廓、拟合平面和圆、测量部件尺寸。让脚本能直接引用观测数据，而不是凭图片猜尺寸。</li>
+    <li><strong>收尾规范</strong>：每个脚本结束时自动应用变换、统一单位为米、Z 轴朝上、检查流形，由原语库强制执行，不依赖 GPT 记得去做。</li>
+  </ul>
+  <p><strong>参数拟合不在 Blender 里做。</strong>拟合要反复"改参数、重新建模、和观测比对"，一个物体可能重复几百次。Blender 每次操作开销较大，所以拟合阶段用 manifold3d 在 CPU 池里快速计算同一套参数化模型，得到最优参数后再交给 Blender 生成最终 mesh。这要求每个模板同时有 Blender 和 manifold3d 两种实现，由同一份参数定义驱动。</p>
+
+  <h3>值得借鉴的研究</h3>
+  <ul>
+    <li><strong>Gaussian Object Carver（GOC）</strong>：从组合式高斯场景提取可分离的水密物体 mesh，把补全模块和重建解耦。借鉴它的模块划分。</li>
+    <li><strong>OMEGAS</strong>：分割目标高斯后再补全。借鉴"分割和补全分两阶段"。</li>
+    <li><strong>MEGA</strong>（2026 年 10 月）：用分割后的高斯渲染多视角图像作为监督信号重建物体 mesh。适合我们没有原图的情况。</li>
+  </ul>
+  <p>这几篇都依赖 3D 生成模型做补全，我们只借鉴思路，补全模块换成"封口 + 对称 + 程序化建模"。</p>
+</section>
+
+<section id="category">
+  <h2><span class="n">05</span>按类别分流</h2>
+  <p>类别很多，所以不按单个类别写规则，而是按<strong>几何特征</strong>分成几条路线。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>几何特征</th><th>典型类别</th><th>主路线</th><th>预期质量</th></tr></thead>
+    <tbody>
+      <tr><td>箱体 / 平面为主</td><td>柜子、桌子、床头柜、书架</td><td>接触面封口 + 箱体模板参数拟合，桌腿用阵列复制</td><td><span class="pill ok">高</span></td></tr>
+      <tr><td>旋转对称</td><td>杯子、花盆、碗、瓶子</td><td>拟合旋转轴，用观测到的轮廓旋转成完整曲面</td><td><span class="pill ok">高</span></td></tr>
+      <tr><td>细长 / 镂空</td><td>椅子、衣架、落地灯</td><td>GPT 识别部件结构，程序化建模（杆件扫掠 + 板件），观测用于尺寸拟合</td><td><span class="pill ok">较高</span> 正是程序化建模的强项</td></tr>
+      <tr><td>小物件</td><td>遥控器、手机、书</td><td>圆角盒等模板 + 尺寸拟合，底面封口</td><td><span class="pill ok">较高</span></td></tr>
+      <tr><td>软体 / 有机形状</td><td>沙发、抱枕、床</td><td>左右镜像补全为主，靠背背面按观测曲面平滑外推后封口</td><td><span class="pill mid">中</span> 人工复核比例较高</td></tr>
+      <tr><td>透明 / 强反光</td><td>玻璃杯、金属锅</td><td>高斯几何不可靠，主要靠 GPT 结构判断 + 模板</td><td><span class="pill mid">中</span></td></tr>
+      <tr><td>细碎结构</td><td>花盆里的植物</td><td>单独拆成实例；几何要求降级，以外观为主</td><td><span class="pill no">低</span> 建议与客户约定标准</td></tr>
+    </tbody>
+  </table></div>
+  <p>路由方式：GPT 先给出类别和几何特征标签，再结合<strong>隐藏洞面积占比</strong>（第 04 节步骤 D）选择路线。只有接触洞的物体直接封口，不调用程序化建模。</p>
+</section>
+
+<section id="split">
+  <h2><span class="n">06</span>实例拆分</h2>
+  <p>针对"桌子加遥控器被分割成一个整体"的情况，组合三种信号：</p>
+  <ul>
+    <li><strong>几何信号</strong>：用 RANSAC 从 SLAM mesh 和高斯中检测支撑平面，平面以上的连通分量就是候选的独立物体。简单、稳定、可解释。</li>
+    <li><strong>颜色与密度信号</strong>：连通但颜色、密度明显不同的区域（比如紧贴桌面的桌布、书本）进一步切分。</li>
+    <li><strong>GPT 校验</strong>：看多视角渲染图，回答"这里有几个独立物体、分别是什么、在图中的大致位置"。</li>
+  </ul>
+  <p>信号一致就自动通过，不一致交给 Agent 诊断或人工复核。拆分出的每个实例带上类别标签和支撑关系（比如"遥控器放在桌面上"），后续的接触面封口要用到。原方案中的 SAM 2 / SAM 3 需要本地部署，按目前"只用外部 API"的前提先不用；如果以后允许部署，可以作为第四种信号接入。</p>
+</section>
+
+<section id="texture">
+  <h2><span class="n">07</span>纹理</h2>
+  <ol>
+    <li><strong>UV 展开</strong>：在 Blender 中展开（智能 UV 投影，复杂物体可用 xatlas 作为备选），控制纹素密度一致。程序化建模的物体可以按部件分别展开，接缝更整齐。这套 UV 以后要给 PBR 复用，现在就要做好。</li>
+    <li><strong>观测区烘焙</strong>：GPU 池从虚拟视角渲染高斯图像，Blender 池把图像按相机投影到 UV 上。每个纹素选择最佳视角，按入射角、距离、清晰度加权融合。</li>
+    <li><strong>补全区纹理</strong>：按优先级处理。对称补全的区域，从对称的另一侧拷贝纹理；程序化建模的区域，沿用同一部件观测区的主材质（比如椅腿统一用已观测椅腿的颜色和纹理）；接触面（底面、贴墙面）用相邻区域的主色。边界处在 UV 空间羽化融合。</li>
+    <li><strong>文字和标签</strong>：GPT 识别残缺内容。规则是<strong>宁可模糊，也不能出现错乱字符</strong>，并设单独的质检项。gpt-6-astra 支持图像生成工具，以后可以评估用它做局部重绘，但要先验证多视角一致性。</li>
+    <li><strong>光照</strong>：高斯颜色里含有场景光照。现阶段直接使用；以后需要 PBR 时再加去光照和材质估计阶段，UV 和来源标记已经就绪。</li>
+  </ol>
+</section>
+
+<section id="gates">
+  <h2><span class="n">08</span>质检门禁与指标定义</h2>
+  <div class="callout info"><b>本节是团队讨论稿</b>指标的定义方法已经确定，具体标准和阈值需要团队和客户一起敲定。文末列出了讨论要点。</div>
+  <p>核心思路：<strong>指标就是把"人眼判断合格不合格"变成机器能自动做的检查。</strong>所以先有人的判断，再有指标，最后用人的判断去校准指标。门禁由指标判定，不由 GPT 判定。</p>
+
+  <h3>第一步：用大白话写出"什么叫合格"</h3>
+  <p>站在客户的角度想：机器人公司拿到一个 mesh 或 USD，什么情况会说"这个不能用"？</p>
+  <ol>
+    <li>导入仿真软件就报错，或者物理仿真出问题（穿模、乱弹）。</li>
+    <li>尺寸不对，比如杯子有半米高。</li>
+    <li>形状和真实物体对不上。</li>
+    <li>看起来不完整，有洞、只有半边。</li>
+    <li>颜色、纹理和真实物体差太多。</li>
+    <li>贴图有明显的接缝、错位、乱码文字。</li>
+  </ol>
+  <p><strong>这份清单最好直接问客户要。</strong>客户很可能已经有验收标准，或者能说出以前拒收过什么样的数据。客户的标准是最权威的指标来源。</p>
+
+  <h3>第二步：给每条标准找一个机器能测的信号</h3>
+  <p>我们没有真实物体做对比，但手里有四种参照：<strong>原始高斯</strong>（拍到的形状和颜色可信）、<strong>SLAM mesh</strong>（尺度和地面、墙面位置可信）、<strong>物理常识</strong>（杯子大约 10 厘米高）、<strong>物理仿真</strong>（放进去跑一下就知道稳不稳）。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>合格标准</th><th>人怎么看</th><th>机器怎么测</th><th>参照物</th></tr></thead>
+    <tbody>
+      <tr><td>① 能用于仿真</td><td>导入后看会不会报错、会不会倒</td><td><strong>拓扑检查</strong>：是否封闭（像一个能装水的容器）、有没有自相交、是不是一个整体。<strong>格式校验</strong>：USD 用 usdchecker 校验，并在 Isaac Sim 中试加载。<strong>静置测试</strong>：放进物理仿真，1 秒后看位移</td><td>物理仿真</td></tr>
+      <tr><td>② 尺寸对</td><td>和实物比一下大小</td><td><strong>尺寸检查</strong>：与 SLAM 测量值一致，并落在类别常识范围内</td><td>SLAM、常识</td></tr>
+      <tr><td>③ 形状对得上</td><td>叠在一起看偏了多少</td><td><strong>观测区偏差</strong>：在拍到的表面上取很多点，测每个点到 mesh 的距离，取中位数，用物体尺寸的百分比表示，大小物体才能用同一个标准。<strong>轮廓重合度</strong>：同一角度拍两张剪影，看重叠比例</td><td>原始高斯</td></tr>
+      <tr><td>④ 完整没有半边</td><td>转一圈看有没有缺块</td><td><strong>洞检查</strong>：有没有破洞边界。<strong>补全占比</strong>：补全区面积占比过高，说明大部分是"猜"的，要重点复核。<strong>GPT 看图打分</strong>：只作参考</td><td>结构常识</td></tr>
+      <tr><td>⑤ 颜色纹理像</td><td>并排看两张图</td><td><strong>外观相似度</strong>：同一角度分别渲染 mesh 和高斯，比较两张图（LPIPS，模拟人眼感受的图像相似度，0 表示完全一样）</td><td>原始高斯</td></tr>
+      <tr><td>⑥ 贴图干净</td><td>看有没有接缝和乱码</td><td><strong>接缝检测</strong>：UV 接缝两侧的颜色差。<strong>文字检查</strong>：GPT 检查文字区域有没有乱码</td><td>常识</td></tr>
+    </tbody>
+  </table></div>
+  <p>一开始指标不要多，有这 10 个左右就够了。以后发现新的问题类型，再加新指标。</p>
+
+  <h3>第三步：用人工判断来定阈值</h3>
+  <ol>
+    <li><strong>人工标注</strong>：选 100 到 200 个物体，覆盖各种类别，由熟悉业务的同事逐个判断"能不能交付"，不能交付的写明原因。这批数据就是黄金集。</li>
+    <li><strong>算指标</strong>：对这些物体跑出全部指标数值。</li>
+    <li><strong>找分界线</strong>：对每个指标，把物体按数值排序，看合格和不合格大概从哪里分开。</li>
+    <li><strong>有重叠时宁可严一点</strong>：见下方说明。</li>
+    <li><strong>按类别分别定</strong>：椅子、沙发这类难物体的阈值可以和桌子、柜子不同。</li>
+  </ol>
+  <pre><span class="c">观测区偏差（占物体尺寸的百分比）</span>
+合格的：   0.1  0.2  0.2  0.3  0.3  0.4  0.4  0.5
+不合格的：                              0.6  0.9  1.2  2.5
+                                    ↑
+                            <span class="c">阈值定在 0.5% 左右</span></pre>
+  <p>判断会出两种错：<strong>漏放</strong>是坏数据通过了，客户会看到，伤害口碑；<strong>误杀</strong>是好数据被拦下，只是多花一点修复成本。因为是卖给客户的数据，漏放的代价远大于误杀，所以阈值要往严的方向定。</p>
+
+  <h3>判断规则：三类指标</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>类型</th><th>包含的指标</th><th>规则</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill no">一票否决</span></td><td>拓扑检查、格式校验、尺寸检查、静置测试</td><td>任何一项不通过，直接不合格</td></tr>
+      <tr><td><span class="pill hard">达标即可</span></td><td>观测区偏差、轮廓重合度、外观相似度</td><td>全部达到阈值才合格</td></tr>
+      <tr><td><span class="pill mid">参考信号</span></td><td>GPT 打分、补全占比、接缝检测</td><td>不单独决定结果，只用来触发修复或送人工复核</td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>上线后持续抽检</strong>：从已通过的物体里随机抽 2% 左右做人工检查。发现漏放就收紧阈值或增加新指标。指标体系就是这样不断完善的。</p>
+
+  <h3>明天讨论的要点</h3>
+  <ul>
+    <li>谁去找客户要验收标准？客户以前拒收过什么样的数据？</li>
+    <li>漏放率能接受多少？比如抽检中坏数据不超过 1% 或 2%。</li>
+    <li>谁来标注黄金集？标注 100 到 200 个物体大约需要 1 到 2 人天。</li>
+    <li>难类别（沙发、植物、透明物体）是否放宽标准，或和客户约定分档交付？</li>
+    <li>补全占比的上限定多少？超过多少就必须人工复核？</li>
+  </ul>
+
+  <h3>各门禁指标（初始草案，待标定）</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>门禁</th><th>指标</th><th>初始阈值（待标定）</th><th>类型</th></tr></thead>
+    <tbody>
+      <tr><td>G1 拆分</td><td>几何信号与 GPT 给出的实例数一致</td><td class="num">一致</td><td><span class="pill hard">硬性</span></td></tr>
+      <tr><td>G2 观测几何</td><td>已观测面积占比；渲染深度与 SLAM 的一致性分数</td><td class="num">仅记录，用于路由</td><td><span class="pill mid">参考</span></td></tr>
+      <tr><td>G3 补全</td><td>建模代码在沙箱中成功执行；输出是流形；多视角轮廓 IoU</td><td class="num">IoU ≥ 0.8</td><td><span class="pill hard">硬性</span></td></tr>
+      <tr><td rowspan="4">G4 几何</td><td>观测区单向距离（观测→mesh）</td><td class="num">中位数 ≤ 0.5% 包围盒对角线</td><td><span class="pill hard">硬性</span></td></tr>
+      <tr><td>水密、流形、无自交、连通分量数</td><td class="num">全部满足，分量数 = 1</td><td><span class="pill hard">硬性</span></td></tr>
+      <tr><td>尺寸合理性（与 GPT 给出的类别常识尺寸比较）</td><td class="num">在常识区间内</td><td><span class="pill hard">硬性</span></td></tr>
+      <tr><td>完整性（GPT 看多视角渲染，判断有无"半边感"）</td><td class="num">≥ 4 / 5</td><td><span class="pill mid">参考</span></td></tr>
+      <tr><td rowspan="2">G5 纹理</td><td>观测视角下 mesh 渲染与高斯渲染的 LPIPS</td><td class="num">≤ 0.15</td><td><span class="pill hard">硬性</span></td></tr>
+      <tr><td>接缝和色差检测；文字区错乱字符检测</td><td class="num">无明显接缝，无乱码</td><td><span class="pill mid">参考</span></td></tr>
+      <tr><td rowspan="2">G6 导出</td><td>GLB 格式校验；USD 通过 usdchecker 校验，并能在 Isaac Sim 中无界面加载</td><td class="num">全部通过</td><td><span class="pill hard">硬性</span></td></tr>
+      <tr><td>米制尺度、重力对齐、原点在底面中心；静置 1 秒的位移</td><td class="num">位移 ≤ 1 cm</td><td><span class="pill hard">硬性</span></td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout info"><b>为什么 GPT 评分只作参考</b>大模型擅长发现"看起来不对劲"，但打分不稳定，同一个物体问两次可能差一分。所以它的分数只用来触发 Agent 诊断，或者给人工复核排优先级，不单独决定能否交付。</div>
+</section>
+
+<section id="agent">
+  <h2><span class="n">09</span>Agent 修复回路</h2>
+  <p>Agent 像一个资深工程师那样工作：看指标和渲染图，判断是什么问题，从工具库里选修复手段，修完再用同一个门禁验证。改写建模代码是重要手段，但永远在沙箱里执行，结果永远要过门禁。</p>
+  <h3>问题类型到工具的映射（初版）</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>诊断出的问题</th><th>优先使用的工具</th><th>备选路线</th></tr></thead>
+    <tbody>
+      <tr><td>漂浮物、毛刺</td><td><code>remove_floaters(opacity, scale_sigma)</code> 收紧参数</td><td>用 SLAM mesh 做更紧的裁剪</td></tr>
+      <tr><td>结构判断错误</td><td>换视角重新做结构理解，附上上次失败的渲染对比图</td><td>换一个模板，或从对称补全切换到程序化建模</td></tr>
+      <tr><td>建模代码执行失败</td><td>把报错信息发回 GPT 修改代码</td><td>退回到模板 + 参数</td></tr>
+      <tr><td>形状大体对、细节偏差大</td><td><code>fit_params(iterations↑)</code> 加大参数优化</td><td>GPT 增加部件细节（倒角、横撑）</td></tr>
+      <tr><td>形变后表面起皱</td><td><code>deform(reg_weight↑)</code> 加强正则</td><td>降低低置信观测点的权重</td></tr>
+      <tr><td>对称轴拟合错误</td><td><code>fit_symmetry(method=robust)</code></td><td>GPT 指定对称方向作为初值</td></tr>
+      <tr><td>多实例粘连</td><td><code>split_by_plane()</code>、<code>split_by_color()</code></td><td>转人工</td></tr>
+      <tr><td>纹理接缝、色差</td><td><code>color_transfer()</code>、<code>seam_blend(width)</code></td><td>重新选择烘焙视角</td></tr>
+    </tbody>
+  </table></div>
+  <h3>运行原则</h3>
+  <ul>
+    <li><strong>修复预算</strong>：每个物体限制修复轮数和 token 上限，超出就转人工，并附上完整的诊断记录。</li>
+    <li><strong>模板沉淀</strong>：GPT 写出的建模代码如果反复成功（比如"四腿方桌"），就整理成参数化模板放进模板库。之后同类物体只需要 GPT 选模板、给初始参数，甚至不调用 GPT，直接由算法拟合参数。<strong>这同时提升了稳定性，也大幅降低了 token 成本。</strong></li>
+    <li><strong>产出分三级</strong>：自动通过、修复后通过、人工复核。初期人工比例会比较高，目标是逐步压到 5% 到 10%。</li>
+  </ul>
+
+  <h3>知识包（skill）：只给 GPT 参与的环节用</h3>
+  <p>先区分三个概念：<strong>工具</strong>是能执行的操作，本质是代码函数；<strong>模板</strong>是可复用的建模代码；<strong>知识包</strong>是教模型怎么做、什么时候做的说明、规范和示例，按需加载。</p>
+  <p>重建、修复、烘焙这些确定性步骤由流水线直接调用工具，不经过 GPT，<strong>不需要知识包</strong>。GPT 负责的三件事（理解结构、写建模脚本、诊断问题）做得好不好，很大程度上取决于它拿到的"操作手册"，所以这部分需要知识包：</p>
+  <div class="tbl"><table>
+    <thead><tr><th>知识包</th><th>内容</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td>Blender 建模规范</td><td>只能调用建模原语库；单位、坐标轴、命名约定；禁止的操作</td><td>减少不合规的脚本</td></tr>
+      <tr><td>结构建模指南</td><td>按结构类型（椅子、柜子、沙发等）说明怎么拆部件、常见尺寸范围、典型错误，附 2 到 3 个成功示例</td><td>提高第一次就做对的概率</td></tr>
+      <tr><td>诊断手册</td><td>每类门禁失败的表现、原因、优先使用的修复工具</td><td>让修复回路收敛更快</td></tr>
+      <tr><td>纹理补全规则</td><td>什么时候镜像拷贝、什么时候沿用部件材质、文字区域怎么处理</td><td>避免乱补纹理</td></tr>
+    </tbody>
+  </table></div>
+  <p>知识包放在代码仓库里自己管理，做版本控制，每次修改都要在黄金集上跑回归。gpt-6-astra 支持 OpenAI 的 skills 工具，但自己管理更可控、可测试，换模型时也能直接带走。</p>
+
+  <h3>稳定性保障</h3>
+  <p>要分开看两件事。<strong>质量稳定靠门禁</strong>：不管 GPT 这次发挥好不好，不合格的物体都过不了门禁，交付的数据质量始终稳定。<strong>产量稳定靠通过率</strong>：GPT 发挥不好只会拉低通过率、增加成本，不会让坏数据流出去。提高通过率的手段：</p>
+  <ul>
+    <li><strong>限制接口</strong>：GPT 只能调用建模原语库，不能写原生 bpy。接口越小，出错越少。</li>
+    <li><strong>结构化输出</strong>：结构理解的结果必须是固定格式的 JSON，程序先校验，不合格直接重试。</li>
+    <li><strong>多候选选优</strong>：同一个物体出 2 到 3 个方案，用指标挑最好的，不依赖单次结果。</li>
+    <li><strong>模板沉淀</strong>：常见结构做成模板后，同类物体基本不再依赖 GPT 自由发挥。</li>
+    <li><strong>锁定版本</strong>：固定模型快照版本、知识包版本、Blender 版本。任何一项升级，都要先过黄金集回归。</li>
+  </ul>
+  <h3>Blender 池的运行与隔离</h3>
+  <ul>
+    <li><strong>进程常驻</strong>：Blender 进程常驻，避免反复启动。每个任务开始前重置为空场景，每处理几十个任务重启一次进程，防止内存泄漏。</li>
+    <li><strong>故障隔离</strong>：单个任务设超时。Blender 崩溃只影响这一个任务，系统自动换一个进程重试。</li>
+    <li><strong>脚本静态检查</strong>：执行前检查 GPT 写的脚本，只允许导入白名单里的模块（建模原语库、math 等），禁止文件、网络、系统调用。</li>
+    <li><strong>容器隔离</strong>：Blender 的 Python 默认什么都能做，所以执行环境必须断网，文件系统只读，只开放当前任务的临时工作目录，并限制 CPU 和内存。</li>
+    <li><strong>不操作界面</strong>：不让 GPT 通过截图和模拟鼠标键盘操作 Blender 界面。这种方式演示效果好，但量产太慢、结果不稳定，一律用脚本。</li>
+  </ul>
+</section>
+
+<section id="schema">
+  <h2><span class="n">10</span>资产规格与预留接口</h2>
+  <p>原则：<strong>现在做很便宜、以后补很贵</strong>的，现在就做对；其余的只留字段。</p>
+  <pre><span class="c"># 每个物体的交付包（示意）</span>
+object_&lt;id&gt;/
+├── mesh.glb                <span class="c"># 米制、Z 轴朝上、原点在底面中心        ← 现在必须做对</span>
+├── object.usd              <span class="c"># 由 Blender 导出：metersPerUnit=1、upAxis=Z、UsdPreviewSurface 材质</span>
+│                           <span class="c">#   预留 UsdPhysics：碰撞体、质量、摩擦（以后直接写入）</span>
+├── texture/basecolor.png   <span class="c"># 现在只有 basecolor</span>
+├── texture/{normal,roughness,metallic}.png   <span class="c"># 预留，以后接 PBR</span>
+├── provenance.npy          <span class="c"># 每个面片的来源：observed / sealed / mirrored / modeled  ← 现在必须做</span>
+├── collision/              <span class="c"># 预留：CoACD 凸分解</span>
+├── meta.json               <span class="c"># 类别、实例 ID、支撑关系、尺寸、结构描述、模型版本</span>
+│                           <span class="c">#   physics: {mass, friction}  预留</span>
+│                           <span class="c">#   articulation: {...}         预留，柜门和抽屉以后会要</span>
+├── build_script.py         <span class="c"># 生成该物体的 Blender 建模脚本或模板参数，可复现</span>
+└── qa_report.json          <span class="c"># 所有门禁指标与结论、修复记录、token 成本</span></pre>
+  <ul>
+    <li><strong>中间产物全部保留</strong>：以后加 PBR 或碰撞体时，从中间产物接着做，不用重跑重建。</li>
+    <li><strong>程序化建模的副产品</strong>：建模代码天然知道部件结构（哪块是柜门、哪块是抽屉）。以后做铰接物体时，这些信息可以直接复用。</li>
+    <li><strong>补全模块留接口</strong>：输入"观测几何 + 结构描述"，输出"完整 mesh"。以后如果允许接入 3D 生成能力，直接作为一种新的补全路线插进来。</li>
+  </ul>
+  <h3>项目结构（概念层面）</h3>
+  <pre>mesh-agent/
+├── core/           <span class="c"># 数据模型：Scene / Object / Artifact / QAReport</span>
+├── stages/         <span class="c"># 六个阶段，各自独立、可单测</span>
+├── tools/          <span class="c"># 原子工具库：清理、配准、形变、对称拟合、UV、烘焙……</span>
+├── modeling/       <span class="c"># Blender 建模原语库 + 结构模板库（每个模板含 Blender 与 manifold3d 两种实现）</span>
+├── blender_worker/ <span class="c"># Blender 常驻进程、脚本静态检查、隔离执行</span>
+├── knowledge/      <span class="c"># 知识包：建模规范、结构指南、诊断手册、纹理规则（版本化）</span>
+├── llm/            <span class="c"># 模型网关：GPT API 调用、限流、缓存、成本记账</span>
+├── qa/             <span class="c"># 指标计算 + 门禁规则（阈值写在配置里）</span>
+├── agent/          <span class="c"># 结构理解、诊断、工具选择、模板沉淀</span>
+├── orchestration/  <span class="c"># Temporal 工作流与 activity</span>
+├── export/         <span class="c"># GLB / USD / URDF</span>
+├── eval/           <span class="c"># 黄金集 + 回归评测</span>
+└── review_ui/      <span class="c"># 人工复核台</span></pre>
+</section>
+
+<section id="license">
+  <h2><span class="n">11</span>许可证与合规</h2>
+  <div class="callout"><b>最高优先级：查清内部训练代码的来源</b>原版 3DGS 官方代码（Inria）明确禁止未经授权的商用。<strong>"内部训练"不等于"内部使用"</strong>：许可证限制的是用途，不是在哪里运行。训练结果最终用于卖数据，就属于商业用途。关键问题是：内部训练代码是从零自研的，还是基于官方代码或它的改版（包括直接调用 <code>diff-gaussian-rasterization</code>）？前者没有问题，后者有风险。处理方式：改用 Apache 2.0 许可的 gsplat 重新训练，或者向 Inria 申请商用授权。</div>
+  <div class="tbl"><table>
+    <thead><tr><th>组件</th><th>许可 / 条款</th><th>结论</th></tr></thead>
+    <tbody>
+      <tr><td>原版 3DGS（Inria）</td><td>仅限研究评估，商用需书面授权</td><td><span class="pill no">不可直接商用</span></td></tr>
+      <tr><td>2DGS / GOF / SuGaR / MILo</td><td>基于 Inria 代码，继承同一许可</td><td><span class="pill no">不可直接商用</span> 只借鉴思路</td></tr>
+      <tr><td>gsplat</td><td>Apache 2.0</td><td><span class="pill ok">推荐</span> 作为渲染底座</td></tr>
+      <tr><td>nvdiffrast / nvdiffrec</td><td>NVIDIA 源码许可，非商用</td><td><span class="pill no">不要引入</span></td></tr>
+      <tr><td>OpenAI API（gpt-6-astra）</td><td>商用 API；需核对企业协议中的数据保留、输出归属、数据驻留条款</td><td><span class="pill mid">需确认</span> 客户场景渲染图会上传到 OpenAI，要确认客户合同是否允许</td></tr>
+      <tr><td>Blender</td><td>GPL</td><td><span class="pill ok">可用</span> 内部用它处理数据没有问题，导出的模型文件不受 GPL 约束；只是我们的 Blender 脚本如果对外分发，要遵守 GPL</td></tr>
+      <tr><td>manifold3d</td><td>Apache 2.0（待复核）</td><td><span class="pill ok">可用</span> 参数拟合</td></tr>
+      <tr><td>Open3D / trimesh / xatlas / CoACD</td><td>MIT 类宽松许可（待逐一复核）</td><td><span class="pill ok">可用</span></td></tr>
+      <tr><td>PyMeshLab</td><td>GPL-3.0</td><td><span class="pill mid">谨慎</span> 内部服务使用通常没问题，但不要随交付物分发</td></tr>
+    </tbody>
+  </table></div>
+  <p>不再使用 3D 生成模型后，原先 SAM 3D Objects、TRELLIS.2、Hunyuan3D 的许可证问题不再涉及。以上是对公开条款的理解，不构成法律意见，正式使用前请法务复核。</p>
+</section>
+
+<section id="roadmap">
+  <h2><span class="n">12</span>排期与成本</h2>
+  <div class="callout"><b>先看产能账</b>按下面的排期，真正量产大约从 12 月 8 日开始，到年底只有约 24 天。一万个场景折合每天约 420 个场景；按每个场景 20 个物体算，每天约 8,300 个物体。建议尽早和客户确认：分批交付，或者按质量等级分档交付。</div>
+
+  <h3>粗略成本估算（试产后用实际数据替换）</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>项目</th><th>假设</th><th>估算</th></tr></thead>
+    <tbody>
+      <tr><td>GPU 计算</td><td>每个物体渲染、深度融合、烘焙约 2 到 3 GPU 分钟</td><td class="num">约 15 到 20 张卡常驻</td></tr>
+      <tr><td>GPT 调用（初期）</td><td>每个物体平均：结构理解 1 次 + 建模迭代 2 到 3 轮 + 质检 1 次，约 5 万输入 token、1 万输出 token。gpt-6-astra 价格：输入 10 美元 / 百万 token，输出 50 美元 / 百万 token</td><td class="num">约 1 美元 / 物体<br>约 8,000 美元 / 天</td></tr>
+      <tr><td>GPT 调用（模板成熟后）</td><td>六到七成物体走封口、对称或现成模板，只需一次结构理解；提示缓存降低输入成本</td><td class="num">预计降到 1/3 以下</td></tr>
+    </tbody>
+  </table></div>
+  <p>GPT 费用是这个方案最大的变动成本，所以<strong>模板沉淀</strong>（第 09 节）和<strong>按难度路由</strong>（第 05 节）不只是质量手段，也是成本手段。API 的速率限制同样决定日产量上限，需要尽早确认账号配额。</p>
+
+  <div class="weeks">
+    <div class="week"><div class="d"><b>第 1 周</b>11/03 – 11/09</div><ul>
+      <li>查清内部训练代码的来源和许可；确认 gpt-6-astra 开通情况和速率配额</li>
+      <li>建黄金集：30 个物体，覆盖第 05 节的每种几何特征，人工标注"可交付 / 不可交付"</li>
+      <li>写好指标脚本：单向距离、水密检查、LPIPS 等</li>
+    </ul></div>
+    <div class="week"><div class="d"><b>第 2 周</b>11/10 – 11/16</div><ul>
+      <li>Blender 建模原语库第一版和第一批知识包；用 gpt-6-astra 在黄金集上做程序化建模实测</li>
+      <li>对比三条补全路线：只封口、封口加对称、封口加对称加程序化建模</li>
+      <li>记录每个物体的 token 消耗，修正成本估算</li>
+    </ul></div>
+    <div class="week"><div class="d"><b>第 3 – 4 周</b>11/17 – 11/30</div><ul>
+      <li>六阶段流水线 v1，接入门禁</li>
+      <li>Temporal 编排、模型网关、Blender 池的最小版本</li>
+      <li>小批量试产 50 个场景，统计各门禁通过率和单物体成本</li>
+    </ul></div>
+    <div class="week"><div class="d"><b>第 5 周</b>12/01 – 12/07</div><ul>
+      <li>接入 Agent 修复回路，先针对失败率最高的两三类问题</li>
+      <li>第一批结构模板入库；人工复核台上线</li>
+    </ul></div>
+    <div class="week"><div class="d"><b>第 6 – 8 周</b>12/08 – 12/31</div><ul>
+      <li>扩容量产，每天看通过率、人工比例、单物体成本、API 限流情况</li>
+      <li>持续把高频建模代码沉淀为模板</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="framework">
+  <h2><span class="n">13</span>框架选型</h2>
+  <p><strong>结论：Python + Temporal + 自研的轻量 agent 层，通过 OpenAI Responses API 调用 gpt-6-astra，不用 AgentScope 这类 agent 框架当主框架。</strong>真正要选的不是语言，而是要不要让 agent 框架掌控整个系统的执行流程。</p>
+  <h3>为什么不让 agent 框架当主框架</h3>
+  <ul>
+    <li><strong>Agent 只占系统的一部分。</strong>几何处理、GPU 计算、质检和编排都是确定性代码。Agent 负责结构理解、写建模代码和修复诊断，每一步都有明确的输入输出和预算上限。</li>
+    <li><strong>控制流只能有一个主人。</strong>Temporal 负责持久化、断点续跑和重试；agent 框架有自己的消息流和状态管理。两者都想决定"下一步做什么"，出问题时很难定位。</li>
+    <li><strong>agent 层本身不复杂。</strong>工具注册表、基于 Responses API 的工具调用循环、预算控制、轨迹记录，自己写几百行，每一步都能打日志、能回放、能单测。</li>
+    <li><strong>生产系统需要稳定。</strong>Agent 框架迭代快、大版本改动多，量产期间不希望被框架升级打断。</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>方案</th><th>优点</th><th>缺点</th><th>结论</th></tr></thead>
+    <tbody>
+      <tr><td>Python + 自研轻量 agent 层</td><td>完全可控，好调试，和 Temporal 无冲突</td><td>多智能体协作等高级能力要自己做</td><td><span class="pill ok">推荐</span></td></tr>
+      <tr><td>AgentScope</td><td>多智能体协作、原型快、国内生态支持好</td><td>自带控制流，和 Temporal 重叠；版本变化快</td><td><span class="pill mid">以后再评估</span></td></tr>
+      <tr><td>LangGraph 等</td><td>图式流程、生态大</td><td>同样有控制流重叠的问题，抽象层较厚</td><td><span class="pill mid">不作为主框架</span></td></tr>
+    </tbody>
+  </table></div>
+  <h3>接入 gpt-6-astra 的注意事项</h3>
+  <ul>
+    <li><strong>工具调用必须用 Responses API。</strong>官方文档说明，这个模型的工具调用只能走 Responses API，不能走 Chat Completions。</li>
+    <li><strong>脚本在自己的 Blender 池里执行，不用 OpenAI 托管的代码执行工具。</strong>托管的 code_interpreter、hosted_shell 用起来方便，但数据要传到外部，也调用不了我们的 Blender 建模库和观测数据。把我们自己的工具以函数调用或 MCP 的方式提供给 GPT。</li>
+    <li><strong>企业账号要管理员开启。</strong>即使已有 API 权限，gpt-6-astra 默认也是关闭的。</li>
+  </ul>
+  <h3>给以后留的口子</h3>
+  <ul>
+    <li><strong>工具按 MCP 协议暴露。</strong>以后换 AgentScope 或别的框架，工具库原样复用，只换调度层。</li>
+    <li><strong>模型调用只走模型网关。</strong>换模型或供应商时，业务代码不用改。</li>
+  </ul>
+  <h3>整体技术栈</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>层</th><th>选型</th></tr></thead>
+    <tbody>
+      <tr><td>语言</td><td>Python 3.11+，GPU 计算用 PyTorch / CUDA</td></tr>
+      <tr><td>编排</td><td>Temporal（Python SDK）</td></tr>
+      <tr><td>大模型</td><td>gpt-6-astra，经 Responses API，统一走模型网关</td></tr>
+      <tr><td>Agent 层</td><td>自研轻量循环，工具按 MCP 或函数调用定义</td></tr>
+      <tr><td>建模与 mesh 处理</td><td><strong>Blender（主力，无界面脚本模式）</strong>：建模原语库、修复、减面、UV、烘焙、导出、质检渲染</td></tr>
+      <tr><td>参数拟合</td><td>manifold3d，在 CPU 池中快速重复计算</td></tr>
+      <tr><td>高斯与几何计算</td><td>gsplat、Open3D、trimesh、CoACD</td></tr>
+      <tr><td>知识包</td><td>自管理、版本化，存放在代码仓库</td></tr>
+      <tr><td>存储</td><td>MinIO / S3 + PostgreSQL</td></tr>
+      <tr><td>部署</td><td>Kubernetes，工作节点无状态</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="review">
+  <h2><span class="n">14</span>方案评审与高可用</h2>
+
+  <h3>可行性结论</h3>
+  <p><strong>方案可行，但有前提。</strong>质量稳定由门禁保证：不合格的物体过不了门禁，交付出去的 mesh 和 USD 质量是稳定的。真正不确定的是<strong>通过率和成本</strong>，也就是"每天能稳定产出多少合格数据、花多少钱"。这取决于几个关键假设，必须在第 2 周用黄金集验证，不能等到量产才发现。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>关键假设</th><th>第 2 周怎么验证</th><th>不成立时的备选</th></tr></thead>
+    <tbody>
+      <tr><td>A. GPT 程序化建模对规则物体足够好</td><td>桌、柜、椅、杯、花盆的自动通过率</td><td>加快模板沉淀，提高人工比例；或评估引入外部 3D 生成 API</td></tr>
+      <tr><td>B. 单物体 GPT 成本在预算内</td><td>实测每个物体的 token 消耗</td><td>更多走模板和封口路线，简单任务换便宜型号</td></tr>
+      <tr><td>C. 可见性估计可靠</td><td>人工抽查"接触洞 / 隐藏洞"分类的准确率</td><td>加强 SLAM 接触关系推理；疑难物体转人工</td></tr>
+      <tr><td>D. 新视角渲染图足够清晰</td><td>抽查发给 GPT 的渲染图质量</td><td>收窄虚拟相机范围，只用高分视角</td></tr>
+      <tr><td>E. API 配额支撑日产量</td><td>按目标并发做压测</td><td>多通道接入，申请提高配额</td></tr>
+      <tr><td>F. Blender 池吞吐足够</td><td>单节点每小时处理的物体数</td><td>加节点；把重计算移到 CPU 池</td></tr>
+    </tbody>
+  </table></div>
+  <p>建议第 2 周结束时开一次评审会，逐条判断是否成立，再决定是否按原计划进入试产。</p>
+
+  <h3>高并发与高可用</h3>
+  <p><strong>架构上能做到。</strong>编排层持久化、工作节点无状态、按资源分池水平扩展，都是成熟做法。评审中发现以下几处风险，其中风险 2 和 3 是原方案漏掉或低估的，已补进方案。</p>
+
+  <h3>风险 1：外部 API 是单点依赖（最大风险）</h3>
+  <p>OpenAI 一旦限流或故障，所有需要 GPT 的步骤都会停下来。</p>
+  <ul>
+    <li><strong>多通道</strong>：模型网关同时接入 OpenAI、Azure、AWS Bedrock 上的 gpt-6-astra，一个出问题自动切换。</li>
+    <li><strong>阶段解耦</strong>：不需要 GPT 的阶段（清理、渲染、融合、封口、对称、烘焙）照常运行；需要 GPT 的请求在队列里缓冲，服务恢复后继续，不丢任务。</li>
+    <li><strong>熔断</strong>：错误率过高时暂停调用，避免把预算浪费在失败请求上。</li>
+  </ul>
+
+  <h3>风险 2：数据搬运（原方案漏掉）</h3>
+  <p>场景高斯体积大，如果每个阶段都从对象存储重新下载，网络和存储会先撑不住。对策：同一个物体的连续阶段固定在同一台机器上执行（Temporal 支持把任务派发到指定节点），节点本地缓存，阶段之间只传裁剪后的物体数据。</p>
+
+  <h3>风险 3：人工复核会成为瓶颈（原方案低估）</h3>
+  <p>每天约 8,300 个物体，即使只有 10% 需要人工复核，也是每天约 830 个。按每个 1 到 2 分钟计算，每天需要 14 到 28 个人时。</p>
+  <ul>
+    <li>提前安排复核人力；</li>
+    <li>复核台要高效：自动排优先级、多视角预览、一键通过或打回、直接标注问题类型；</li>
+    <li>复核结果回流，用来调整门禁阈值、充实知识包。</li>
+  </ul>
+
+  <h3>风险 4：基础组件的高可用</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>组件</th><th>高可用做法</th></tr></thead>
+    <tbody>
+      <tr><td>Temporal</td><td>多节点集群，或直接使用 Temporal Cloud；后端数据库主备</td></tr>
+      <tr><td>PostgreSQL</td><td>主从复制加自动切换，或云上托管数据库</td></tr>
+      <tr><td>对象存储</td><td>MinIO 分布式部署，或云上 S3 / OSS</td></tr>
+      <tr><td>工作节点</td><td>无状态，部署在 K8s 上。节点故障时任务心跳超时，自动在其他节点重试</td></tr>
+      <tr><td>Blender 池</td><td>进程级隔离，崩溃自动重启，任务自动重试</td></tr>
+      <tr><td>模型网关</td><td>多副本部署；多通道接入；队列缓冲</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>风险 5：缺少发布前的质量保护</h3>
+  <p>修改提示词、知识包、模型版本、Blender 版本或门禁阈值，都可能悄悄拉低质量。</p>
+  <ul>
+    <li>每次修改必须先在黄金集上跑回归，指标不下降才能上线；</li>
+    <li>新版本先用一小部分流量灰度运行，观察通过率和成本，再全量切换。</li>
+  </ul>
+
+  <h3>风险 6：时间</h3>
+  <p>8 周内把完整的高可用体系和量产一起做完非常紧张。建议分两步：</p>
+  <ul>
+    <li><strong>12 月中旬前</strong>：优先保证产量和质量，用托管服务降低运维量（托管数据库、对象存储、Temporal Cloud），模型网关先接两个通道；</li>
+    <li><strong>之后</strong>：再补多区域部署、完善灰度发布等。</li>
+  </ul>
+
+  <h3>其他评审意见</h3>
+  <ul>
+    <li><strong>可见性估计有不确定性。</strong>没有训练相机位姿，"哪些区域被观测过"只能靠高斯覆盖度推算，会影响补全路线的选择。对策：结合 SLAM mesh 判断接触关系，作为第二个信号。</li>
+    <li><strong>新视角渲染图可能误导 GPT。</strong>偏离训练视角太远时，渲染图会模糊或有伪影。对策：给视角打分，只把高质量视角发给 GPT。</li>
+    <li><strong>实例拆分少了 2D 分割模型。</strong>只靠几何信号和 GPT，紧贴在一起的物体可能拆不开。对策：先观察 G1 失败率，必要时转人工处理。</li>
+    <li><strong>成本估算未经验证。</strong>第 2 周实测后要修正，并据此决定 API 预算。</li>
+  </ul>
+
+  <h3>建议明确的服务目标</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>目标</th><th>建议值</th></tr></thead>
+    <tbody>
+      <tr><td>日产量</td><td>约 420 个场景 / 天，并能持续维持</td></tr>
+      <tr><td>外部 API 故障</td><td>任务不丢失，恢复后自动继续</td></tr>
+      <tr><td>单节点故障</td><td>任务在几分钟内自动转移到其他节点</td></tr>
+      <tr><td>质量</td><td>所有交付物都通过门禁，并附带质检报告</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="reqs">
+  <h2><span class="n">15</span>需求对照：并发、性能、稳定、扩展</h2>
+  <p>逐条对照最初提出的四项要求，说明方案里用什么机制满足、在哪一节。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>要求</th><th>方案中的具体机制</th><th>位置</th></tr></thead>
+    <tbody>
+      <tr><td>高并发</td><td>
+        <ul>
+          <li>Temporal 异步工作流：场景拆成物体子工作流并行执行，等待外部 API 时不占用工作线程</li>
+          <li>每个池单独设置并发上限，比如每张 GPU 同时跑 1 到 2 个任务、每个 Blender 进程一次一个任务</li>
+          <li>I/O 密集的部分（GPT 调用、存储读写）用 asyncio 异步处理；CPU 密集的部分用多进程，不用多线程，因为 Python 的多线程跑不满多个 CPU 核</li>
+          <li>任务队列加背压：下游排满时上游自动等待，不会把系统压垮</li>
+        </ul></td><td>02、13</td></tr>
+      <tr><td>高性能</td><td>
+        <ul>
+          <li>缓存：节点本地数据缓存、GPT 结果缓存、API 提示缓存、渲染结果按"高斯哈希 + 视角"缓存</li>
+          <li>索引：PostgreSQL 按场景、物体、阶段、状态建索引；对象存储按 scene / object / version 的固定路径组织</li>
+          <li>批量处理：一次 GPU 调用渲染多个视角；同一场景的物体集中在同一张卡上处理；Blender 进程复用</li>
+          <li>数据本地化：同一物体的连续阶段固定在同一台机器上</li>
+          <li>少调用 GPT：封口、对称、模板路线不需要 GPT，是最大的性能和成本优化</li>
+        </ul></td><td>02、05、09、12</td></tr>
+      <tr><td>高稳定</td><td>
+        <ul>
+          <li>异常分类：可重试的错误（超时、限流）自动退避重试；不可重试的错误（数据损坏）直接转人工，不浪费资源</li>
+          <li>超时与心跳：每个阶段都有超时，长任务定期上报心跳，节点故障时自动转移</li>
+          <li>幂等：同一阶段重跑结果一致，重试不会产生重复数据</li>
+          <li>熔断与多通道：外部 API 故障时自动切换或暂停</li>
+          <li>结构化日志：每条日志带场景 ID、物体 ID、阶段、模型版本，可以按物体追溯全过程</li>
+          <li>监控告警：通过率、排队长度、错误率、成本异常时告警</li>
+          <li>版本锁定与回归：模型、知识包、Blender 版本固定，变更必须先过黄金集回归</li>
+        </ul></td><td>02、09、14</td></tr>
+      <tr><td>可扩展</td><td>
+        <ul>
+          <li>水平扩展：工作节点无状态，部署在 K8s 上，按队列长度自动扩缩容</li>
+          <li>按资源分池：哪个池是瓶颈就只扩哪个</li>
+          <li>功能扩展：补全模块、导出格式、门禁都是可替换的插件接口，以后加 PBR、碰撞体、铰接物体、3D 生成能力，不用改主流程</li>
+          <li>模型可替换：所有模型调用走模型网关</li>
+          <li>关于微服务：早期采用"模块化单体 + 独立工作池"，已经能水平扩展；等某个模块确实需要独立发布或独立扩容时再拆，避免过早拆分带来的运维负担</li>
+        </ul></td><td>02、10、13</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="open">
+  <h2><span class="n">16</span>团队问题清单</h2>
+  <p>不管团队怎么回答，整体架构、六阶段流水线和几何路线都不会变。答案影响的只是具体组件、产能规划和交付规格。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>优先级</th><th>问题</th><th>答案影响什么</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill no">必须问清</span></td><td>内部训练代码是从零自研，还是基于 Inria 官方代码或改版？代码里导入的是 <code>diff_gaussian_rasterization</code> 还是 <code>gsplat</code>？仓库里的 LICENSE 有没有提到 Inria 或 Max Planck？</td><td>许可证风险。有问题就改用 gsplat 重训或申请授权，只换组件，架构不变</td></tr>
+      <tr><td><span class="pill no">必须问清</span></td><td>公司 OpenAI 账号是否已开通 gpt-6-astra（企业账号需管理员开启）？速率限制等级和月度预算是多少？</td><td>日产量上限和成本上限</td></tr>
+      <tr><td><span class="pill no">必须问清</span></td><td>客户合同是否允许把场景渲染图上传到 OpenAI？</td><td>合规。不允许的话，整个大模型接入方式要重新考虑</td></tr>
+      <tr><td><span class="pill no">必须问清</span></td><td>内部有没有 GPU 机器做计算？多少张，什么型号？</td><td>高斯渲染和深度融合需要 GPU，不涉及部署模型</td></tr>
+      <tr><td><span class="pill no">必须问清</span></td><td>一万个场景必须年底一次交齐吗？能否分批交付或按质量分档？</td><td>排期和产能，不影响技术路线</td></tr>
+      <tr><td><span class="pill mid">尽量问清</span></td><td>客户对格式（GLB / USD / URDF）、面数上限、纹理分辨率、坐标系有什么要求？</td><td>只影响导出阶段</td></tr>
+      <tr><td><span class="pill mid">尽量问清</span></td><td>能否提供两三个遮挡洞的典型失败案例，最好带原始数据？</td><td>放进黄金集，第 2 周实测要用</td></tr>
+      <tr><td><span class="pill mid">尽量问清</span></td><td>每个场景平均有多少个物体？</td><td>产能和成本估算，目前按 20 个计算</td></tr>
+      <tr><td><span class="pill mid">尽量问清</span></td><td>能安排多少人做人工复核？</td><td>每天可能有数百个物体需要复核，见第 14 节风险 3</td></tr>
+      <tr><td><span class="pill mid">尽量问清</span></td><td>团队现用的 Blender 版本？有没有现成的建模或处理脚本？</td><td>建模原语库需要 4.5 以上版本（Manifold 布尔求解器）；现有脚本可以直接整理进原语库</td></tr>
+      <tr><td><span class="pill hard">知道更好</span></td><td>SLAM 用的是 RGB-D、激光，还是两者都有？</td><td>方案会自动评估 SLAM 可信度，知道了参数能调得更准</td></tr>
+      <tr><td><span class="pill hard">知道更好</span></td><td>分割高斯是用什么方法得到的？</td><td>估计分割误差大小，也就是"分割洞"有多常见</td></tr>
+      <tr><td><span class="pill hard">知道更好</span></td><td>上游是否留存了训练照片和相机位姿？</td><td>有的话纹理质量能明显提升</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="refs">
+  <h2><span class="n">17</span>参考资料</h2>
+  <ul class="sources">
+    <li><a href="https://developers.openai.com/api/docs/models/gpt-6-astra" target="_blank" rel="noopener">GPT-6 Astra 模型文档（OpenAI）</a> · <a href="https://openai.com/index/gpt-6-astra/" target="_blank" rel="noopener">发布说明</a></li>
+    <li><a href="https://wentao.live/blog/astra-and-beyond/" target="_blank" rel="noopener">GPT-6 Astra: 3D, Embodied AI, and Beyond</a></li>
+    <li><a href="https://www.meshy.ai/tutorials/gpt-astra-meshy-3d-workflow" target="_blank" rel="noopener">How to Make 3D Models with GPT-6 Astra（Meshy）</a></li>
+    <li><a href="https://explainx.ai/blog/gpt-6-astra-3d-spatial-reasoning-community-builds-2026" target="_blank" rel="noopener">GPT-6 Astra 3D Builds（explainx.ai）</a></li>
+    <li><a href="https://openrouter.ai/openai/gpt-6-astra" target="_blank" rel="noopener">GPT-6 Astra 价格（OpenRouter）</a></li>
+    <li><a href="https://github.com/graphdeco-inria/gaussian-splatting/blob/main/LICENSE.md" target="_blank" rel="noopener">Inria 3DGS LICENSE</a></li>
+    <li><a href="https://github.com/nerfstudio-project/gsplat" target="_blank" rel="noopener">gsplat（Apache 2.0）</a></li>
+    <li><a href="https://github.com/NVlabs/nvdiffrast" target="_blank" rel="noopener">nvdiffrast</a></li>
+    <li><a href="https://github.com/Anttwo/MILo" target="_blank" rel="noopener">MILo</a></li>
+    <li><a href="https://arxiv.org/html/2412.02075v1" target="_blank" rel="noopener">Gaussian Object Carver</a></li>
+    <li><a href="https://arxiv.org/html/2404.15891" target="_blank" rel="noopener">OMEGAS</a></li>
+    <li><a href="https://arxiv.org/html/2610.01707v1" target="_blank" rel="noopener">MEGA</a></li>
+  </ul>
+</section>
+</main>
+</div>
