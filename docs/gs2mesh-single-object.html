@@ -1,0 +1,695 @@
+<title>单物体流水线调试方案</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: same technical-doc system as gs2mesh-plan.html. Sticky TOC left, one reading column right.
+   Blue = trusted observation, red = suspect observation (dent), amber = completed geometry, grey dotted = missing. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --band: #eaeef4;
+  --fg: #18202d;
+  --muted: #5a6476;
+  --line: #d5dbe5;
+  --accent: #2753c4;
+  --accent-soft: #e3eafb;
+  --gen: #b86d0c;
+  --gen-soft: #fbefdc;
+  --ok: #2b7d48;
+  --crit: #b3261e;
+  --crit-soft: #fbe5e3;
+  --serif: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  --sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1218; --surface: #171b23; --band: #1d232d; --fg: #e3e7ee; --muted: #98a2b3; --line: #2b3240;
+    --accent: #7d9df2; --accent-soft: #1d2a4a; --gen: #e6a54a; --gen-soft: #3a2a12;
+    --ok: #63c084; --crit: #f0756c; --crit-soft: #3d1c1a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1218; --surface: #171b23; --band: #1d232d; --fg: #e3e7ee; --muted: #98a2b3; --line: #2b3240;
+  --accent: #7d9df2; --accent-soft: #1d2a4a; --gen: #e6a54a; --gen-soft: #3a2a12;
+  --ok: #63c084; --crit: #f0756c; --crit-soft: #3d1c1a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--sans); font-size: 15px; line-height: 1.75;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 64px;
+}
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 48px; }
+nav.toc { position: sticky; top: env(safe-area-inset-top, 0px); align-self: start; padding-top: 40px; font-size: 13px; max-height: 100vh; overflow-y: auto; }
+nav.toc .k { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+nav.toc ol { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 2px; counter-reset: t; }
+nav.toc li { counter-increment: t; }
+nav.toc a { display: flex; gap: 8px; color: var(--muted); text-decoration: none; padding: 3px 0; }
+nav.toc a::before { content: counter(t, decimal-leading-zero); font-family: var(--mono); font-size: 11px; padding-top: 2px; color: var(--line); }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); }
+main { min-width: 0; padding-top: 40px; }
+header.doc { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 8px; }
+.meta { font-family: var(--mono); font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 18px; }
+h1 { font-family: var(--serif); font-size: clamp(28px, 4vw, 38px); line-height: 1.3; margin: 12px 0 14px; text-wrap: balance; }
+.lede { font-size: 16.5px; max-width: 44em; margin: 0; }
+h2 { font-family: var(--serif); font-size: 24px; line-height: 1.4; margin: 0 0 6px; text-wrap: balance; }
+h2 .n { font-family: var(--mono); font-size: 13px; color: var(--accent); font-weight: 500; display: block; letter-spacing: .06em; margin-bottom: 2px; }
+h3 { font-size: 16.5px; margin: 28px 0 6px; }
+h4 { font-size: 15px; margin: 18px 0 4px; }
+section { padding-top: 48px; scroll-margin-top: 16px; }
+p, ul, ol { max-width: 46em; }
+p { margin: 10px 0; }
+ul, ol { padding-left: 1.3em; margin: 10px 0; }
+li { margin: 3px 0; }
+code { font-family: var(--mono); font-size: .88em; background: var(--band); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
+.obs { color: var(--accent); font-weight: 700; }
+.gen { color: var(--gen); font-weight: 700; }
+.bad { color: var(--crit); font-weight: 700; }
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 24px; }
+.summary div { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.summary b { display: block; font-size: 14px; margin-bottom: 4px; }
+.summary span { font-size: 13.5px; color: var(--muted); line-height: 1.65; display: block; }
+.callout { border-left: 3px solid var(--crit); background: var(--crit-soft); padding: 12px 16px; border-radius: 0 6px 6px 0; max-width: 46em; margin: 16px 0; font-size: 14.5px; }
+.callout.info { border-color: var(--accent); background: var(--accent-soft); }
+.callout.gen { border-color: var(--gen); background: var(--gen-soft); font-weight: 400; color: var(--fg); }
+.callout b { display: block; margin-bottom: 2px; }
+.tbl { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.6; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-weight: 500; font-size: 12.5px; color: var(--muted); background: var(--band); white-space: nowrap; }
+td:first-child { font-weight: 500; white-space: nowrap; }
+td.num { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pill { display: inline-block; font-size: 12px; line-height: 1; padding: 4px 8px; border-radius: 99px; font-weight: 500; white-space: nowrap; }
+.pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.pill.no { color: var(--crit); background: var(--crit-soft); }
+.pill.mid { color: var(--gen); background: var(--gen-soft); }
+.pill.hard { color: var(--fg); background: var(--band); }
+figure { margin: 22px 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 18px 14px; }
+.svgbox { overflow-x: auto; }
+figure svg { display: block; width: 100%; height: auto; min-width: 680px; color: var(--fg); }
+figcaption { font-size: 13px; color: var(--muted); margin-top: 10px; max-width: 60em; }
+svg text { font-family: var(--sans); font-size: 12px; fill: var(--fg); }
+svg .t { font-size: 13px; font-weight: 700; }
+svg .s { font-size: 11.5px; fill: var(--muted); }
+svg .lab { font-size: 11px; fill: var(--muted); }
+svg .bandlab { font-family: var(--mono); font-size: 11px; fill: var(--muted); letter-spacing: .04em; }
+svg .band { fill: var(--band); }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+svg .box.hi { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; }
+svg .box.gen { fill: var(--gen-soft); stroke: var(--gen); stroke-width: 1.4; }
+svg .box.crit { fill: var(--crit-soft); stroke: var(--crit); stroke-width: 1.4; }
+svg .ar { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+svg .ar.dash { stroke-dasharray: 4 3; }
+svg .ahead { fill: var(--muted); }
+svg .ln-obs { stroke: var(--accent); stroke-width: 5; fill: none; stroke-linecap: round; }
+svg .ln-bad { stroke: var(--crit); stroke-width: 5; fill: none; stroke-linecap: round; }
+svg .ln-gen { stroke: var(--gen); stroke-width: 2.4; fill: none; stroke-dasharray: 7 4; }
+svg .ln-miss { stroke: var(--muted); stroke-width: 1.4; fill: none; stroke-dasharray: 2 4; }
+svg .ln-env { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+svg .t-obs { fill: var(--accent); font-weight: 700; }
+svg .t-gen { fill: var(--gen); font-weight: 700; }
+svg .t-bad { fill: var(--crit); font-weight: 700; }
+pre { font-family: var(--mono); font-size: 12.5px; line-height: 1.65; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; margin: 14px 0; max-width: 100%; }
+pre .c { color: var(--muted); }
+.exp { display: grid; gap: 10px; margin: 16px 0; }
+.exp > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; }
+.exp .id { font-family: var(--mono); font-size: 13px; color: var(--accent); font-weight: 500; padding-top: 1px; }
+.exp b { display: block; font-size: 14.5px; }
+.exp p { margin: 4px 0 0; font-size: 14px; }
+.exp .r { color: var(--muted); font-size: 13.5px; }
+.weeks { display: grid; gap: 10px; margin: 16px 0; }
+.week { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; }
+.week .d { font-family: var(--mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.week .d b { display: block; font-family: var(--sans); font-size: 14px; color: var(--fg); }
+.week ul { margin: 0; }
+.sources { font-size: 13px; }
+.sources li { word-break: break-word; }
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  nav.toc { display: none; }
+  .week { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .exp > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+
+<div class="wrap">
+<nav class="toc" aria-label="目录">
+  <div class="k">目录</div>
+  <ol>
+    <li><a href="#diagnosis">问题复盘与根因</a></li>
+    <li><a href="#principles">修订后的设计原则</a></li>
+    <li><a href="#overview">流水线总览</a></li>
+    <li><a href="#clean">物体高斯清理</a></li>
+    <li><a href="#observe">观测几何提取</a></li>
+    <li><a href="#confidence">观测置信度</a></li>
+    <li><a href="#structure">结构理解</a></li>
+    <li><a href="#complete">形状补全</a></li>
+    <li><a href="#fit">拟合与网格化</a></li>
+    <li><a href="#texture">纹理与贴图</a></li>
+    <li><a href="#qa">质检指标</a></li>
+    <li><a href="#debug">调试方法与实验清单</a></li>
+    <li><a href="#tools">工具链与许可证</a></li>
+    <li><a href="#schedule">调试排期</a></li>
+    <li><a href="#refs">参考资料</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="doc">
+  <div class="meta"><span>修订稿 v0.7</span><span>2026-11-05</span><span>范围：单物体流水线（原方案阶段 2–5）</span><span>前置文档：gs2mesh-plan.html v0.6</span></div>
+  <h1>单物体流水线调试方案</h1>
+  <p class="lede">v0.6 方案落地后，形状补全和纹理两块效果不达预期：凳子类物体补全后仍有凹陷，纹理在不同面上颜色不一致。本文分析根因，修订单物体流水线的设计原则和各阶段做法，并给出可以在内部数据上逐项验证的实验清单。目标是先让单物体流水线在一个固定测试集上稳定产出合格结果，再扩展到其他类别和场景级流程。</p>
+  <div class="summary">
+    <div><b>几何：凹陷是错误观测，不是缺失</b><span>原方案假设"观测到的都可信"。凹陷区域有数据但数据错了，补全不会处理它，形变还会把好的模板拉进坑里。修订后引入逐区域置信度，可疑观测按缺失处理。</span></div>
+    <div><b>规则物体以参数化结果为准</b><span>凳子、桌子、柜子这类物体，观测数据只用来拟合尺寸参数，最终几何直接用参数化模型，不再做非刚性形变。仿真要的是干净和尺寸正确。</span></div>
+    <div><b>纹理：只用视角无关的颜色</b><span>3DGS 的高阶球谐系数编码的是视角相关颜色，按视角烘焙就会出现正面和侧面不同色。修订后只用 0 阶（DC）颜色，加多视角加权融合和按材质区域去光照。</span></div>
+  </div>
+</header>
+
+<section id="diagnosis">
+  <h2><span class="n">01</span>问题复盘与根因</h2>
+  <p>没有看到内部实现和数据，以下根因是根据现象倒推的，按可能性排序。每一条都在第 12 节有对应的验证实验，建议先跑实验确认，再改代码。</p>
+
+  <h3>几何：洞和凹陷是两类问题</h3>
+  <figure>
+    <div class="svgbox">
+    <svg viewBox="0 0 760 250" role="img" aria-label="凳面截面示意：可信观测、凹陷和缺失三类区域">
+      <rect class="band" x="0" y="0" width="760" height="250" rx="6"></rect>
+      <text class="bandlab" x="16" y="24">凳子截面示意（侧视）</text>
+      <!-- legs -->
+      <line class="ln-env" x1="190" y1="120" x2="170" y2="220"></line>
+      <line class="ln-env" x1="570" y1="120" x2="590" y2="220"></line>
+      <line class="ln-env" x1="120" y1="222" x2="640" y2="222"></line>
+      <text class="lab" x="648" y="226">地面</text>
+      <!-- seat top: observed good -->
+      <path class="ln-obs" d="M150 90 L300 90"></path>
+      <!-- dent -->
+      <path class="ln-bad" d="M300 90 C 330 90, 340 118, 370 118 C 400 118, 410 90, 440 90"></path>
+      <!-- template line across dent -->
+      <path class="ln-gen" d="M300 90 L440 90"></path>
+      <path class="ln-obs" d="M440 90 L610 90"></path>
+      <!-- seat bottom: missing -->
+      <path class="ln-obs" d="M150 90 L150 112"></path>
+      <path class="ln-obs" d="M610 90 L610 112"></path>
+      <path class="ln-miss" d="M150 112 L610 112"></path>
+      <!-- labels -->
+      <text class="t-obs" x="170" y="70">可信观测</text>
+      <text class="s" x="170" y="56">多视角一致、覆盖充分</text>
+      <text class="t-bad" x="325" y="152">凹陷：错误观测</text>
+      <text class="s" x="300" y="168">有数据，但几何是错的</text>
+      <text class="t-gen" x="330" y="70">正确形状</text>
+      <text class="lab" x="420" y="140">座面底部：从未被观测（缺失）</text>
+      <line class="ln-miss" x1="470" y1="128" x2="470" y2="114"></line>
+      <text class="s" x="16" y="244">原方案只区分"有观测 / 无观测"，凹陷被归入"有观测"，补全和形变都不会修正它。</text>
+    </svg>
+    </div>
+    <figcaption>图 1　蓝色是可信观测，红色是凹陷（有数据但错误），琥珀虚线是物体应有的形状，灰色点线是从未被观测的区域。洞（缺失）会被补全阶段识别并处理；凹陷不会。</figcaption>
+  </figure>
+
+  <div class="tbl"><table>
+    <thead><tr><th>现象</th><th>最可能的根因</th><th>出现在哪个阶段</th></tr></thead>
+    <tbody>
+      <tr><td>表面局部凹陷</td><td>渲染深度用的是 alpha 混合深度。物体高斯在遮挡区域稀疏、半透明，混合深度落在前后表面之间，TSDF 融合出凹坑。</td><td>阶段 2 观测几何</td></tr>
+      <tr><td>凹陷、穿孔</td><td>虚拟相机从未观测过的角度渲染，看到的是穿过稀疏高斯的背面或空白，这些深度也被融合进去了。</td><td>阶段 2 观测几何</td></tr>
+      <tr><td>与遮挡物接触处有坑</td><td>实例分割把边界附近属于凳子的高斯切给了遮挡物或背景。</td><td>阶段 1 实例拆分</td></tr>
+      <tr><td>补全后又被拉坏</td><td>非刚性形变以"模板贴近所有观测"为目标，没有区分观测可信度，把完整模板拉进了凹陷。</td><td>阶段 4 拟合与融合</td></tr>
+      <tr><td>对称补全没修掉凹陷</td><td>对称补全只把"观测到的一侧"镜像到"缺失的一侧"。凹陷所在一侧被当作已观测，不会被替换。</td><td>阶段 3 形状补全</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>纹理：颜色随视角变化</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>现象</th><th>最可能的根因</th><th>出现在哪个阶段</th></tr></thead>
+    <tbody>
+      <tr><td>正面和侧面颜色不同</td><td>渲染烘焙图时使用了完整球谐（通常 3 阶）。高阶项表示随视角变化的颜色（高光、反射、环境光），从不同视角烘焙到不同面上，就是不同的颜色。</td><td>阶段 5 纹理烘焙</td></tr>
+      <tr><td>面与面之间有接缝和色块</td><td>每个面只选一个"最佳视角"投影，相邻面来自不同视角，曝光和高光不一致。缺少全局色彩调平。</td><td>阶段 5 纹理烘焙</td></tr>
+      <tr><td>阴影、明暗面被烘进贴图</td><td>3DGS 颜色本身就包含场景光照（阴影、AO、环境光），原方案没有去光照步骤。</td><td>阶段 5 纹理烘焙</td></tr>
+      <tr><td>贴图看上去"生硬"</td><td>缺少 UV 边缘扩充、mipmap、材质参数，补全区域的纹理是拉伸边缘像素得到的。</td><td>阶段 5–6</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="principles">
+  <h2><span class="n">02</span>修订后的设计原则</h2>
+  <p>v0.6 的核心原则是"观测区域信观测，缺失区域按结构补全"。实践表明，这条原则在数据有瑕疵时不成立。修订为以下四条。</p>
+  <ol>
+    <li><strong>观测分三态：可信、可疑、缺失。</strong>每个表面区域都要先算置信度，再决定信不信。只有<span class="obs">可信观测</span>参与约束最终几何；<span class="bad">可疑观测</span>和缺失区域一样，交给结构先验补全。</li>
+    <li><strong>规则物体以结构先验为主，观测为辅。</strong>对家具、器物这类规则几何，最终 mesh 直接用参数化模型，观测数据只负责确定参数（尺寸、位置、倾角、圆角）。不做逐顶点的非刚性形变。对仿真来说，一个尺寸正确的干净凳子比一个忠实保留凹陷的凳子更有用。</li>
+    <li><strong>观测与先验冲突时，以多数证据为准。</strong>对称副本之间、多个视角之间、高斯与 SLAM mesh 之间互相投票。单一来源的异常观测不能决定几何。</li>
+    <li><strong>颜色只用视角无关的部分。</strong>纹理只从球谐 0 阶颜色取色；视角相关的部分在仿真资产里没有对应物，应该丢弃。</li>
+  </ol>
+  <div class="callout info"><b>"忠实"和"正确"的取舍</b>扫描重建追求忠实于数据；仿真资产追求物理上正确。本流水线的验收标准是后者：尺寸误差小、水密、结构合理、外观一致。凡是二者冲突的地方，按正确处理。</div>
+</section>
+
+<section id="overview">
+  <h2><span class="n">03</span>流水线总览</h2>
+  <p>阶段编号沿用 v0.6，新增阶段 2c（观测置信度）和 3a（结构理解）。阶段 1 实例拆分不在本文范围内，只补充一条边界回收要求（第 04 节）。</p>
+  <figure>
+    <div class="svgbox">
+    <svg viewBox="0 0 900 400" role="img" aria-label="修订后的单物体流水线">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahead" d="M0 0 L10 5 L0 10 z"></path></marker></defs>
+      <rect class="band" x="0" y="0" width="900" height="400" rx="6"></rect>
+      <text class="bandlab" x="16" y="24">观测侧</text>
+      <text class="bandlab" x="16" y="214">先验侧</text>
+      <!-- row 1 -->
+      <rect class="box" x="16" y="40" width="150" height="72" rx="6"></rect>
+      <text class="t" x="28" y="64">2a 高斯清理</text>
+      <text class="s" x="28" y="84">激活参数 · 去漂浮</text>
+      <text class="s" x="28" y="100">边界回收</text>
+      <rect class="box" x="196" y="40" width="170" height="72" rx="6"></rect>
+      <text class="t" x="208" y="64">2b 观测几何</text>
+      <text class="s" x="208" y="84">DC 渲染 · 深度 + alpha</text>
+      <text class="s" x="208" y="100">多视角一致性 · 点云</text>
+      <rect class="box hi" x="396" y="40" width="170" height="72" rx="6"></rect>
+      <text class="t" x="408" y="64">2c 观测置信度</text>
+      <text class="s" x="408" y="84">覆盖 · 密度 · SLAM</text>
+      <text class="s" x="408" y="100">对称一致性 → 三态</text>
+      <!-- three-state outputs -->
+      <rect class="box hi" x="600" y="34" width="130" height="30" rx="5"></rect>
+      <text class="t-obs" x="612" y="54">可信观测</text>
+      <rect class="box crit" x="600" y="72" width="130" height="30" rx="5"></rect>
+      <text class="t-bad" x="612" y="92">可疑观测</text>
+      <rect class="box" x="600" y="110" width="130" height="30" rx="5"></rect>
+      <text class="t" x="612" y="130">缺失</text>
+      <line class="ar" x1="166" y1="76" x2="194" y2="76" marker-end="url(#ah)"></line>
+      <line class="ar" x1="366" y1="76" x2="394" y2="76" marker-end="url(#ah)"></line>
+      <line class="ar" x1="566" y1="62" x2="598" y2="50" marker-end="url(#ah)"></line>
+      <line class="ar" x1="566" y1="84" x2="598" y2="87" marker-end="url(#ah)"></line>
+      <line class="ar" x1="566" y1="100" x2="598" y2="122" marker-end="url(#ah)"></line>
+      <!-- row 2 -->
+      <rect class="box gen" x="16" y="230" width="170" height="72" rx="6"></rect>
+      <text class="t" x="28" y="254">3a 结构理解</text>
+      <text class="s" x="28" y="274">GPT：类别 · 部件</text>
+      <text class="s" x="28" y="290">对称类型 · 接触面</text>
+      <rect class="box gen" x="216" y="230" width="190" height="72" rx="6"></rect>
+      <text class="t" x="228" y="254">3b 形状补全</text>
+      <text class="s" x="228" y="274">A 封口 · B 对称投票</text>
+      <text class="s" x="228" y="290">C 参数化 · D 兜底</text>
+      <rect class="box gen" x="436" y="230" width="180" height="72" rx="6"></rect>
+      <text class="t" x="448" y="254">4 拟合与网格化</text>
+      <text class="s" x="448" y="274">稳健参数拟合</text>
+      <text class="s" x="448" y="290">重网格 · 水密 · UV</text>
+      <rect class="box" x="646" y="230" width="236" height="72" rx="6"></rect>
+      <text class="t" x="658" y="254">5 纹理</text>
+      <text class="s" x="658" y="274">DC 取色 · 多视角加权</text>
+      <text class="s" x="658" y="290">调平 · 材质区去光照 · 补色</text>
+      <line class="ar" x1="186" y1="266" x2="214" y2="266" marker-end="url(#ah)"></line>
+      <line class="ar" x1="406" y1="266" x2="434" y2="266" marker-end="url(#ah)"></line>
+      <line class="ar" x1="616" y1="266" x2="644" y2="266" marker-end="url(#ah)"></line>
+      <!-- cross links -->
+      <path class="ar" d="M730 49 L800 49 L800 160 L526 160 L526 228" marker-end="url(#ah)"></path>
+      <text class="lab" x="610" y="176">可信观测：只用来定参数</text>
+      <path class="ar dash" d="M730 87 L770 87 L770 145 L311 145 L311 228" marker-end="url(#ah)"></path>
+      <path class="ar dash" d="M730 125 L750 125 L750 145" ></path>
+      <text class="lab" x="318" y="200">可疑 + 缺失：交给先验补全</text>
+      <path class="ar dash" d="M101 112 L101 228" marker-end="url(#ah)"></path>
+      <text class="lab" x="108" y="200">多视角渲染图</text>
+      <!-- gates -->
+      <text class="s" x="16" y="340">每个阶段后有门禁，指标见第 11 节。几何门禁（G3、G4）不通过不进入纹理阶段。</text>
+      <text class="s" x="16" y="360">所有阶段落盘中间产物和可视化，用于第 12 节的逐阶段定位。</text>
+    </svg>
+    </div>
+    <figcaption>图 2　修订后的单物体流水线。关键变化：观测侧输出不再是"一个 mesh"，而是带三态标签的观测；可信观测只进入拟合阶段约束参数，可疑观测和缺失区域都交给先验侧补全。</figcaption>
+  </figure>
+
+  <h3>每个阶段的输入输出</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>阶段</th><th>输入</th><th>输出（落盘）</th></tr></thead>
+    <tbody>
+      <tr><td>2a 高斯清理</td><td>物体高斯、原场景高斯、实例框</td><td><code>gs_clean.ply</code>、清理统计</td></tr>
+      <tr><td>2b 观测几何</td><td><code>gs_clean.ply</code>、支撑面</td><td>每视角 RGB / 深度 / alpha / 有效掩码，融合点云 <code>obs_points.ply</code>（带法线）</td></tr>
+      <tr><td>2c 观测置信度</td><td>点云、视角数据、SLAM mesh</td><td>每点置信度与三态标签 <code>obs_conf.npz</code>，热力图渲染</td></tr>
+      <tr><td>3a 结构理解</td><td>多视角渲染图、尺寸框</td><td>结构描述 <code>structure.json</code>（按 schema 校验）</td></tr>
+      <tr><td>3b 形状补全</td><td>结构描述、三态点云</td><td>完整候选 mesh 与参数 <code>candidate.glb</code>、<code>params.json</code></td></tr>
+      <tr><td>4 拟合与网格化</td><td>候选、可信观测、alpha 掩码</td><td>拟合后参数、水密 mesh、UV <code>geom_final.glb</code></td></tr>
+      <tr><td>5 纹理</td><td>最终 mesh、<code>gs_clean.ply</code>、视角数据</td><td>basecolor 贴图、材质分区、<code>asset.glb</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="clean">
+  <h2><span class="n">04</span>阶段 2a　物体高斯清理</h2>
+  <p>后续所有几何和纹理都来自这一步的输出，这一步的错误会一路传下去。重点检查以下四项。</p>
+
+  <h3>1. 参数激活（最常见的隐蔽 bug）</h3>
+  <p>Inria 3DGS 的 PLY 文件存的是激活前的原始值：不透明度是 logit，尺度是 log，四元数未归一化，颜色是球谐系数而不是 RGB。gsplat 等渲染器要求传入激活后的值。漏掉任何一项，渲染结果看起来"差不多"，但深度和不透明度都是错的。</p>
+<pre><span class="c"># Inria PLY → 渲染器输入</span>
+opacity = sigmoid(ply["opacity"])                 <span class="c"># logit → [0,1]</span>
+scales  = exp(stack(ply["scale_0..2"]))           <span class="c"># log → 米</span>
+quats   = normalize(stack(ply["rot_0..3"]))       <span class="c"># 顺序为 wxyz</span>
+sh_dc   = stack(ply["f_dc_0..2"])                 <span class="c"># [N,3]</span>
+sh_rest = ply["f_rest_*"].reshape(N, 3, -1).transpose(0, 2, 1)   <span class="c"># 注意：按通道存储，需转置</span>
+rgb_dc  = clip(0.5 + 0.28209479 * sh_dc, 0, 1)    <span class="c"># DC 颜色，纹理阶段用</span></pre>
+
+  <h3>2. 去除漂浮物和噪声高斯</h3>
+  <ul>
+    <li>不透明度过滤：去掉 <code>opacity &lt; 0.05</code> 的高斯（阈值按数据调整）。</li>
+    <li>尺度过滤：去掉最大轴超过物体包围盒对角线 10% 的超大高斯，以及三轴都极小且不透明度低的噪点。</li>
+    <li>统计离群：对高斯中心做半径或 KNN 离群检测（Open3D <code>remove_statistical_outlier</code>）。</li>
+    <li>连通性：按中心点做 DBSCAN 聚类，只保留主簇和与主簇距离很近的小簇。凳子腿细，聚类半径不要设得太小，否则会把腿切掉。</li>
+  </ul>
+
+  <h3>3. 边界回收</h3>
+  <p>分割在物体与遮挡物、地面接触处常常切得过狠，留下一个坑。在物体包围盒外扩 3–5 cm 的范围内，从原场景高斯里回收满足以下条件的高斯：</p>
+  <ul>
+    <li>不属于任何其他实例；</li>
+    <li>中心离物体高斯表面距离小于 1–2 cm；</li>
+    <li>DC 颜色与邻近物体高斯接近（Lab 空间 ΔE 在阈值内）；</li>
+    <li>不在检测到的地面或墙面平面上（避免把地面收进来）。</li>
+  </ul>
+  <p>回收的高斯打上 <code>recovered</code> 标记，置信度阶段给它较低的初始权重。</p>
+
+  <h3>4. 支撑面</h3>
+  <p>用 SLAM mesh 或场景高斯拟合地面和墙面平面（RANSAC），把物体底部低于地面的高斯裁掉。这个平面后面用于接触面封口和尺度校验。</p>
+</section>
+
+<section id="observe">
+  <h2><span class="n">05</span>阶段 2b　观测几何提取</h2>
+  <p>目的是得到一份<strong>宁缺毋滥</strong>的观测点云：宁可少一些点、留下洞，也不要有错误的点。洞会被补全阶段处理，错误的点会污染后续每一步。</p>
+
+  <h3>虚拟相机布置</h3>
+  <ul>
+    <li>以物体包围盒中心为球心，按斐波那契球面均匀取 100–200 个视角，取 2 个半径（包围盒半径的 1.8 倍和 2.5 倍）。</li>
+    <li>去掉相机位于地面以下、墙内或被其他实例完全挡住的视角（物体是从场景中抠出来渲染的，但这些视角对应的表面在原场景里不可能被观测到）。</li>
+    <li>保存每个视角的内外参，后续置信度和纹理都要复用。</li>
+  </ul>
+
+  <h3>渲染：深度和 alpha 一起用</h3>
+<pre><span class="c"># gsplat 示例：sh_degree=0 只用 DC 颜色；RGB+ED 同时输出颜色和期望深度</span>
+render, alpha, _ = gsplat.rasterization(
+    means, quats, scales, opacity, colors=sh_all,     <span class="c"># sh_all: [N, K, 3]</span>
+    viewmats=V, Ks=K, width=W, height=H,
+    sh_degree=0, render_mode="RGB+ED")
+rgb, depth = render[..., :3], render[..., 3]
+valid = alpha[..., 0] &gt; 0.95                          <span class="c"># 半透明像素不可信，丢弃</span></pre>
+  <ul>
+    <li><strong>alpha 阈值是治凹陷的第一道关。</strong>alpha 低于 0.95 的像素，深度是前后表面的混合值，直接丢弃。可以从 0.9、0.95、0.98 三档做对比实验（第 12 节 E2）。</li>
+    <li><strong>深度边缘腐蚀。</strong>对有效掩码做 2–3 像素腐蚀，去掉轮廓处的混合深度。</li>
+    <li>如果所用渲染器支持中位深度（累计透射率首次低于 0.5 处的深度），优先用中位深度，它对半透明高斯更稳健。不支持时用 ED 加 alpha 阈值加下面的一致性过滤代替。</li>
+  </ul>
+
+  <h3>多视角一致性过滤</h3>
+  <p>这是多视角立体（MVS）里常用的深度融合方法，用来去掉只在少数视角出现的错误深度：</p>
+<pre>for 每个视角 i 的每个有效像素 p:
+    X = 反投影(p, depth_i[p])
+    n_agree = 0
+    for 邻近视角 j（光轴夹角 10°–60°）:
+        q, z = 投影(X, j)
+        if valid_j[q] and |depth_j[q] - z| / z &lt; 0.01:
+            n_agree += 1
+    保留 p 当且仅当 n_agree &gt;= 3</pre>
+  <p>通过过滤的像素反投影成点云，法线用深度图梯度或该处主导高斯的最短轴方向。最后按 2–5 mm 体素下采样。</p>
+
+  <h3>是否还需要 TSDF</h3>
+  <p>TSDF 融合仍然可以用（Open3D <code>ScalableTSDFVolume</code>），但它的输出只用于可视化和兜底路线 D。主路线不再把 TSDF mesh 当作观测几何的载体，原因是 TSDF 会把错误深度平均进表面，而且会把未观测区域闭合成一个看似合理的面，掩盖缺失。主路线只用过滤后的点云。</p>
+
+  <h3>辅助观测源</h3>
+  <ul>
+    <li><strong>高斯中心点云：</strong>取不透明度高、形状扁平（最短轴远小于其余两轴）的高斯，中心作为点，最短轴作为法线。它不依赖渲染，可以和深度点云互相校验。</li>
+    <li><strong>SLAM mesh：</strong>在物体包围盒内裁剪出来，作为第三个观测源参与置信度投票，不直接进入几何。</li>
+  </ul>
+</section>
+
+<section id="confidence">
+  <h2><span class="n">06</span>阶段 2c　观测置信度</h2>
+  <p>这是本次修订新增的核心阶段。对观测点云的每个点算一个 0 到 1 的置信度，然后分成三态。</p>
+
+  <h3>置信度的组成</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>分项</th><th>计算方式</th><th>防的是什么</th></tr></thead>
+    <tbody>
+      <tr><td>覆盖度 c<sub>view</sub></td><td>该点在多少个视角中可见且通过一致性过滤，并按入射角余弦加权；归一化到 [0,1]</td><td>只被掠射角或单一视角看到的点</td></tr>
+      <tr><td>密度 c<sub>gs</sub></td><td>该点邻域内高斯的不透明度之和，相对物体整体中位数归一化</td><td>稀疏、半透明区域产生的错误表面</td></tr>
+      <tr><td>SLAM 一致性 c<sub>slam</sub></td><td>到 SLAM mesh 的距离，小于 1 cm 记 1，大于 3 cm 记 0，中间线性；SLAM 没覆盖处记 0.5</td><td>高斯本身的几何偏差</td></tr>
+      <tr><td>对称一致性 c<sub>sym</sub></td><td>对称变换后，在对称副本位置附近是否有吻合的观测（第 08 节）；无对称时记 0.5</td><td>单侧的凹陷、鼓包</td></tr>
+      <tr><td>来源 c<sub>src</sub></td><td>原始物体高斯记 1，边界回收的高斯记 0.6</td><td>回收错误</td></tr>
+    </tbody>
+  </table></div>
+<pre>conf = c_view^0.3 · c_gs^0.2 · c_slam^0.2 · c_sym^0.3 · c_src      <span class="c"># 加权几何平均：任一项很低都会拉低总分</span>
+
+可信：conf &gt;= 0.6      可疑：0.3 &lt;= conf &lt; 0.6      缺失：没有观测点（由覆盖图确定）</pre>
+  <p>权重和阈值是初始值，需要在测试集上校准。校准方法：在 5–10 个物体上人工标注凹陷区域，调整权重使凹陷点大多落入"可疑"、正常表面大多落入"可信"。</p>
+
+  <h3>可视化</h3>
+  <p>每个物体输出一张置信度热力图（点云按置信度着色，多视角渲染拼图）。调试时先看这张图：如果凹陷区域不是红色，后面的补全就不可能修好它，问题在这一阶段。</p>
+</section>
+
+<section id="structure">
+  <h2><span class="n">07</span>阶段 3a　结构理解</h2>
+  <p>由 gpt-6-astra 看多视角渲染图，输出结构化的物体描述。和 v0.6 的区别是：<strong>GPT 只负责描述结构，不直接写最终建模代码</strong>。建模代码由我们自己的参数化工具库生成，GPT 选模板、填初值。这样输出稳定、可校验，参数的精确值由拟合阶段决定。</p>
+
+  <h3>输入</h3>
+  <ul>
+    <li>6–12 张 DC 颜色渲染图（正视、侧视、俯视、45° 斜视），附带比例尺和包围盒尺寸（米）。</li>
+    <li>一张置信度热力图，提示哪些区域的观测不可信，避免 GPT 把凹陷当成设计特征。</li>
+  </ul>
+
+  <h3>输出 schema（示例：凳子）</h3>
+<pre>{
+  "category": "stool",
+  "template": "round_seat_n_legs",            <span class="c">// 必须是模板库中已有的模板</span>
+  "symmetry": { "type": "rotational", "order": 4, "axis_hint": "vertical" },
+  "contact": ["floor"],
+  "parts": [
+    { "name": "seat", "shape": "cylinder", "init": { "radius": 0.17, "thickness": 0.03 } },
+    { "name": "leg",  "shape": "tapered_cylinder", "count": 4,
+      "init": { "r_top": 0.015, "r_bottom": 0.012, "splay_deg": 8 } },
+    { "name": "stretcher", "shape": "ring", "optional": true }
+  ],
+  "materials": [ { "parts": ["seat"], "kind": "wood" }, { "parts": ["leg", "stretcher"], "kind": "wood" } ],
+  "suspect_regions": ["seat top, one side, looks dented — likely occlusion artifact"]
+}</pre>
+  <ul>
+    <li>用 JSON Schema 校验输出，不合规就带着错误信息重试，最多 2 次。</li>
+    <li>同一物体调用 3 次（不同视角子集），模板和对称阶数取多数票；不一致时转人工或走兜底路线。</li>
+    <li>模板库从高频类别开始建：方凳、圆凳、四腿椅、方桌、圆桌、箱体柜、圆柱或旋转体容器。每个模板是一个 Python 函数，输入参数字典，输出水密 mesh（用 manifold3d 布尔运算拼部件，保证水密）。</li>
+  </ul>
+</section>
+
+<section id="complete">
+  <h2><span class="n">08</span>阶段 3b　形状补全</h2>
+  <p>四条路线按顺序尝试。前一条能给出完整、通过门禁的形状，就不进入下一条。</p>
+
+  <div class="tbl"><table>
+    <thead><tr><th>路线</th><th>适用</th><th>做法</th><th>稳定性</th></tr></thead>
+    <tbody>
+      <tr><td>A 接触面封口</td><td>所有贴地、贴墙的物体（与其他路线叠加）</td><td>沿支撑面平面截断并封口</td><td><span class="pill ok">高</span></td></tr>
+      <tr><td>B 对称投票</td><td>有镜像或旋转对称、但不适合参数化的物体（异形花瓶、雕花椅背）</td><td>拟合对称轴，所有对称副本投票重建表面</td><td><span class="pill ok">较高</span></td></tr>
+      <tr><td>C 参数化模板</td><td>规则家具、器物：凳、桌、椅、柜、杯、盆</td><td>模板 + 参数拟合，最终几何即模板输出</td><td><span class="pill ok">高</span></td></tr>
+      <tr><td>D 兜底重建</td><td>无对称、无模板的物体（软装、植物）</td><td>带置信度权重的 Screened Poisson，只用可信点</td><td><span class="pill mid">中</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>路线 B：对称投票</h3>
+  <p>v0.6 的对称补全是"镜像观测侧到缺失侧"。修订为对称副本之间投票，凹陷会被其他副本的正常观测投掉。</p>
+<pre><span class="c"># 1. 对称轴拟合：GPT 给出对称类型和轴的初值，再用 ICP 精修</span>
+<span class="c">#    目标：min Σ_可信点 dist(T_k(p), obs_points)，T_k 为第 k 个对称变换</span>
+<span class="c"># 2. 投票：把所有点变换到"基本域"（例如 4 阶旋转对称取 0°–90° 扇区）</span>
+pooled = concat([T_k_inv(obs_points) for k in range(order)])
+<span class="c"># 3. 在基本域内按体素或径向射线分组，每组取置信度加权的稳健值</span>
+<span class="c">#    对外表面：沿法线方向取加权中位数（凹陷是少数派，会被投掉）</span>
+<span class="c"># 4. 把基本域结果再按对称变换复制回完整物体，重建表面</span></pre>
+  <p>注意事项：对称轴误差会让投票结果变模糊，轴拟合精度要在 1–2 mm 和 0.5° 以内；真实存在的不对称结构（比如单侧的把手）要由结构描述标出并排除在投票之外。</p>
+
+  <h3>路线 C：参数化模板（凳子推荐路线）</h3>
+  <ol>
+    <li>按 <code>structure.json</code> 选模板，填入 GPT 给的初值。</li>
+    <li>用对称轴和支撑面确定模板的位置和朝向：凳子竖直轴等于旋转对称轴，腿底落在地面平面上。</li>
+    <li>进入阶段 4 做参数拟合。</li>
+    <li>拟合后的模板输出就是最终几何，不再向观测点做逐顶点形变。</li>
+  </ol>
+  <p>这条路线对凹陷天然免疫：凹陷区域的点在拟合中被稳健损失降权（第 09 节），而模板本身不可能产生凹陷。</p>
+
+  <h3>路线 D：兜底重建</h3>
+  <ul>
+    <li>只用可信点，以置信度为权重做 Screened Poisson（PyMeshLab），深度 8–10。</li>
+    <li>用观测覆盖图裁掉远离可信点的面片，再用 Blender 的 voxel remesh 加小洞填充得到水密结果。</li>
+    <li>这条路线的结果默认进人工复核队列，不自动通过。</li>
+  </ul>
+</section>
+
+<section id="fit">
+  <h2><span class="n">09</span>阶段 4　拟合与网格化</h2>
+
+  <h3>参数拟合</h3>
+  <p>模板参数通常只有 5–20 个，用无梯度优化（CMA-ES）即可，不需要可微渲染。目标函数由三项组成：</p>
+<pre>L(θ) = w1 · Σ_{p∈可信点} conf_p · ρ( dist(p, M(θ)) )         <span class="c"># 观测 → 模型 的单向距离</span>
+     + w2 · Σ_{视角 v} (1 - IoU( sil(M(θ), v), mask_v ))      <span class="c"># 轮廓一致</span>
+     + w3 · R(θ)                                             <span class="c"># 先验：对称、腿等长、尺寸在常识范围内</span>
+
+ρ(d) = min(d², τ²)，τ ≈ 1.5 cm       <span class="c"># 截断损失：离模型太远的点视为离群，不再拉动模型</span></pre>
+  <ul>
+    <li><strong>单向距离。</strong>只算"观测点到模型"的距离，不算"模型到观测点"。缺失区域没有观测点，不应该把模型往任何方向拉。</li>
+    <li><strong>轮廓项对凹陷不敏感。</strong>表面凹陷通常不改变外轮廓，所以轮廓 IoU 能稳定约束整体尺寸。轮廓用 alpha 掩码（阈值 0.5，比深度阈值宽松）。只用覆盖度高的视角。</li>
+    <li>点到模型的距离用 trimesh 或 Open3D <code>RaycastingScene</code> 计算；轮廓用 Open3D 光线投射或简单的 mesh 光栅化生成，每次评估在毫秒级。</li>
+    <li>CMA-ES 用 <code>cma</code> 库，种群 16–32，迭代 100–300 次，一个物体在 CPU 上几十秒到几分钟。</li>
+  </ul>
+
+  <h3>非刚性形变（只用于路线 B、D）</h3>
+  <p>路线 C 不做形变。路线 B、D 如果需要把候选形状贴近观测，用 ARAP 形变（libigl），并满足：</p>
+  <ul>
+    <li>只有可信点作为目标约束，且约束点到候选面的距离小于 τ 才生效；</li>
+    <li>形变后与候选形状的最大偏差不超过 1 cm，超过说明候选形状本身不对，应退回补全阶段，而不是硬拉。</li>
+  </ul>
+
+  <h3>网格化与清理（Blender 无界面脚本）</h3>
+  <ul>
+    <li>模板输出用 manifold3d 合并部件，保证水密、无自交。</li>
+    <li>减面到目标面数（仿真视觉网格建议 5k–30k 三角面），保留尖锐边。</li>
+    <li>UV 展开：规则物体用 Blender Smart UV Project，或者 xatlas；按部件分 UV 岛，便于纹理阶段按材质区处理。UV 岛间距至少 4 像素（按 2048 贴图计）。</li>
+    <li>规范坐标：Z 轴向上，原点在底面中心，单位米。</li>
+  </ul>
+</section>
+
+<section id="texture">
+  <h2><span class="n">10</span>阶段 5　纹理与贴图</h2>
+  <p>没有原始照片时，颜色只能从高斯取。高斯颜色里混着视角相关效应和场景光照，纹理阶段的工作就是把这两部分尽量去掉，得到一张视角无关、光照均匀、无接缝的 basecolor 贴图。</p>
+
+  <h3>第一步：只用 DC 颜色</h3>
+  <p>球谐 0 阶系数对应视角无关的平均颜色，1–3 阶对应随视角变化的部分（高光、反射）。正面和侧面颜色不同，大概率就是高阶项造成的。做法：渲染烘焙图时设 <code>sh_degree=0</code>，或者把 <code>f_rest</code> 全部置零。这一项改动小、收益大，建议最先做（第 12 节 E1）。</p>
+
+  <h3>第二步：取色到纹素，两种方法</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>方法</th><th>做法</th><th>优点</th><th>缺点</th></tr></thead>
+    <tbody>
+      <tr><td>直接取色（推荐先做）</td><td>对每个纹素求其 3D 位置，用 KD 树找附近 K 个高斯，按 <code>opacity × exp(-d²/2σ²)</code> 加权平均 DC 颜色</td><td>完全视角无关，没有接缝，实现简单</td><td>细节受高斯密度限制，偏糊</td></tr>
+      <tr><td>多视角投影</td><td>每个纹素投影到所有可见视角，按 <code>cos(θ)^4 × 覆盖度</code> 加权平均（θ 为视线与法线夹角，大于 70° 的视角不用），用深度图做遮挡检测</td><td>细节更清楚</td><td>需要调平接缝</td></tr>
+    </tbody>
+  </table></div>
+  <p>两者可以组合：直接取色作为低频底色，多视角投影的高频细节（原图减去其高斯模糊）叠加上去。这样底色稳定，细节也保留。</p>
+  <p><strong>补全区域的颜色</strong>：参数化模型和对称补全生成的表面没有观测颜色。按优先级：取对称副本对应位置的颜色；没有对称则取同材质区域的平均色加轻微噪声纹理；不要从边缘拉伸像素。</p>
+
+  <h3>第三步：接缝和色彩调平</h3>
+  <ul>
+    <li>使用多视角投影时，加全局色彩调平（Lempitsky &amp; Ivanov 2007，mvs-texturing 中有实现）：对每个视角块求一个平滑的颜色偏移，使接缝两侧颜色连续。</li>
+    <li>UV 岛边缘向外扩 8–16 像素（dilation），避免 mipmap 采样时露出背景色。</li>
+  </ul>
+
+  <h3>第四步：按材质区域去光照</h3>
+  <p>3DGS 颜色本身包含阴影、AO 和环境光，完全去除需要原始照片和光照估计，这里做一个对仿真足够的近似：</p>
+  <ol>
+    <li><strong>材质分区。</strong>按结构描述里的部件和材质标注划分区域；同一部件内再按 Lab 颜色做 K-means（K=1–3），分出真正不同的材质（比如凳面的漆面和边缘的原木）。</li>
+    <li><strong>估计低频光照。</strong>在每个区域内，对亮度通道 L 做大尺度平滑（在网格表面上按测地距离平滑，或在纹理空间按 UV 岛分别做高斯模糊），得到低频光照场 S。</li>
+    <li><strong>去除。</strong><code>L_albedo = L / S × mean(L)</code>，只修改亮度，色度 a、b 不动。阴影、明暗面被拉平，木纹等高频细节保留。</li>
+    <li><strong>AO 补偿（可选）。</strong>用 Blender 烘焙几何 AO，在 AO 很暗的区域（凳腿与座面的交角）适当提亮。</li>
+  </ol>
+  <div class="callout gen"><b>预期效果的边界</b>这个近似能消掉大面积的阴影和明暗面差异，但处理不了强烈的投射阴影边界和彩色环境反射。这些情况用材质区平均色替换局部区域更稳妥，并在质检报告中标出。</div>
+
+  <h3>第五步：材质参数与导出</h3>
+  <ul>
+    <li>basecolor 贴图 2048²，sRGB 色彩空间，PNG 或 KTX2。</li>
+    <li>roughness、metallic 先按材质类别给常数（木头 0.6 / 0，金属 0.35 / 1，塑料 0.45 / 0），为后续 PBR 预留。</li>
+    <li>生成 mipmap，导出 GLB 时检查贴图色彩空间标记。</li>
+  </ul>
+</section>
+
+<section id="qa">
+  <h2><span class="n">11</span>质检指标</h2>
+  <p>阈值是建议初值，需要在测试集上校准。所有指标进入每个物体的质检报告。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>门禁</th><th>指标</th><th>初始阈值</th></tr></thead>
+    <tbody>
+      <tr><td>G2 观测</td><td>有效像素占比（alpha 阈值后 / 物体轮廓内）</td><td class="num">≥ 70%</td></tr>
+      <tr><td>G2 观测</td><td>可信点占全部观测点比例</td><td class="num">≥ 60%</td></tr>
+      <tr><td>G3 补全</td><td>结构描述三次调用一致（模板、对称阶数）</td><td class="num">3 / 3 或 2 / 3</td></tr>
+      <tr><td>G4 几何</td><td>水密、流形、无自交（manifold3d / trimesh 检查）</td><td class="num">全部通过</td></tr>
+      <tr><td>G4 几何</td><td>可信点到最终 mesh 距离的 P95</td><td class="num">≤ 8 mm</td></tr>
+      <tr><td>G4 几何</td><td>多视角轮廓 IoU 平均值</td><td class="num">≥ 0.92</td></tr>
+      <tr><td>G4 几何</td><td>尺寸与 SLAM 包围盒偏差</td><td class="num">≤ 2%</td></tr>
+      <tr><td>G4 几何</td><td>凹陷检测：最终 mesh 上偏离对称副本或模板超过 5 mm 的面积占比</td><td class="num">≤ 1%</td></tr>
+      <tr><td>G5 纹理</td><td>跨视角颜色一致性：同一纹素在不同视角渲染中的 ΔE 标准差</td><td class="num">≤ 3</td></tr>
+      <tr><td>G5 纹理</td><td>接缝两侧 ΔE 均值</td><td class="num">≤ 4</td></tr>
+      <tr><td>G5 纹理</td><td>同材质区内低频亮度变化（去光照后）</td><td class="num">≤ 10%</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="debug">
+  <h2><span class="n">12</span>调试方法与实验清单</h2>
+
+  <h3>调试方法</h3>
+  <ol>
+    <li><strong>固定测试集。</strong>选 8–12 个物体：3–4 个凳子和椅子（含目前效果差的那个凳子）、2 个桌子、2 个柜子、2 个容器、1 个无对称物体。整个调试周期内不更换，每次改动都在全集上跑。</li>
+    <li><strong>人工遮挡测试。</strong>从测试集中挑 3 个数据质量好的物体，人为删掉一侧 20%–40% 的高斯，或者在一侧降低高斯不透明度制造凹陷。原物体作为真值，算 Chamfer 距离和体积 IoU。这是唯一能定量回答"补全补得对不对"的办法。</li>
+    <li><strong>逐阶段落盘与可视化。</strong>每个阶段输出固定视角（6 个）的渲染拼图，文件名带阶段编号。凹陷出现时，从前往后翻拼图，找到它第一次出现的阶段。</li>
+    <li><strong>一次只改一个变量。</strong>每次实验记录配置哈希、代码版本和指标，结果写入表格，便于对比。</li>
+  </ol>
+
+  <h3>实验清单（按建议执行顺序）</h3>
+  <div class="exp">
+    <div><span class="id">E0</span><div><b>核对参数激活</b><p>检查 PLY 读入后不透明度、尺度、四元数是否激活，f_rest 是否正确转置。用激活前后的数值分布直方图确认。</p><p class="r">判据：opacity 在 [0,1]，scale 量级为毫米到厘米。这一项错了，后面的实验都没有意义。</p></div></div>
+    <div><span class="id">E1</span><div><b>DC 颜色 vs 完整球谐</b><p>同一物体分别用 <code>sh_degree=0</code> 和 3 渲染 12 个视角，比较同一表面在不同视角的颜色差。</p><p class="r">预期：DC 渲染下正面和侧面颜色差明显缩小。若改善明显，纹理阶段直接切换到 DC。</p></div></div>
+    <div><span class="id">E2</span><div><b>alpha 阈值扫描</b><p>alpha 阈值取 0（不过滤）、0.9、0.95、0.98，分别融合点云，对比凹陷区域的点。</p><p class="r">预期：阈值提高后凹陷区域的点明显变少，变成洞。若凹陷仍在，说明错误几何来自高不透明度的高斯，查 E3。</p></div></div>
+    <div><span class="id">E3</span><div><b>多视角一致性过滤开关</b><p>在 E2 选定的阈值上，开关一致性过滤，对比点云和凹陷区域。</p><p class="r">预期：凹陷区域的残留点被大量过滤。</p></div></div>
+    <div><span class="id">E4</span><div><b>凹陷来源定位</b><p>把凹陷区域的点反查到对应高斯，看它们的不透明度、尺度、是否靠近分割边界，并在原场景高斯中查看同一区域。</p><p class="r">若原场景中该区域完整、物体高斯中缺失，问题在分割，做边界回收；若原场景中也凹陷，问题在原始重建，只能靠先验补全。</p></div></div>
+    <div><span class="id">E5</span><div><b>置信度热力图</b><p>实现第 06 节的置信度，人工检查凹陷区域是否被标成可疑。</p><p class="r">判据：人工标注的凹陷点中 80% 以上落入可疑，正常表面点中 90% 以上落入可信。</p></div></div>
+    <div><span class="id">E6</span><div><b>凳子走参数化路线</b><p>手写一个圆凳或方凳模板，用 GPT 结构描述加 CMA-ES 拟合，不做形变。</p><p class="r">判据：G4 全部通过，凹陷检测为 0，尺寸偏差 ≤ 2%。这是本轮调试的里程碑。</p></div></div>
+    <div><span class="id">E7</span><div><b>形变开关对比</b><p>同一物体分别输出"拟合后不形变"和"拟合后 ARAP 形变"，比较凹陷检测和可信点距离。</p><p class="r">用于确认形变是否在把模型拉进凹陷；若是，规则物体关闭形变。</p></div></div>
+    <div><span class="id">E8</span><div><b>取色方法对比</b><p>直接取色、多视角投影、两者组合三种方式，比较跨视角 ΔE 和接缝 ΔE，并肉眼看清晰度。</p></div></div>
+    <div><span class="id">E9</span><div><b>去光照前后对比</b><p>同一物体去光照前后的贴图、材质区亮度方差、多视角渲染拼图。</p></div></div>
+  </div>
+</section>
+
+<section id="tools">
+  <h2><span class="n">13</span>工具链与许可证</h2>
+  <p>都是开源工具，均可在内网离线安装。许可证以仓库中 LICENSE 文件的当前版本为准，商用前请法务复核。</p>
+  <div class="tbl"><table>
+    <thead><tr><th>工具</th><th>用途</th><th>许可证</th></tr></thead>
+    <tbody>
+      <tr><td>gsplat</td><td>高斯渲染：RGB、深度、alpha，支持 <code>sh_degree</code> 设置</td><td>Apache-2.0</td></tr>
+      <tr><td>Open3D</td><td>点云处理、离群去除、DBSCAN、RANSAC 平面、TSDF、光线投射</td><td>MIT</td></tr>
+      <tr><td>trimesh</td><td>mesh 读写、距离查询、水密检查</td><td>MIT</td></tr>
+      <tr><td>manifold3d</td><td>模板部件布尔合并，保证水密</td><td>Apache-2.0</td></tr>
+      <tr><td>Blender（bpy，无界面）</td><td>减面、UV、AO 烘焙、voxel remesh、导出 GLB</td><td>GPL（脚本调用不影响产出资产）</td></tr>
+      <tr><td>xatlas（Python 绑定）</td><td>UV 展开，可替代 Blender Smart UV</td><td>MIT</td></tr>
+      <tr><td>PyMeshLab</td><td>Screened Poisson（路线 D）、网格清理</td><td>GPL-3.0，仅作内部工具调用</td></tr>
+      <tr><td>libigl（Python 绑定）</td><td>ARAP 形变、测地距离</td><td>MPL-2.0</td></tr>
+      <tr><td>pycma</td><td>CMA-ES 参数拟合</td><td>BSD-3-Clause</td></tr>
+      <tr><td>SciPy / scikit-learn</td><td>KD 树、K-means、对称轴优化</td><td>BSD-3-Clause</td></tr>
+      <tr><td>mvs-texturing（参考实现）</td><td>多视角纹理与全局色彩调平的算法参考</td><td>BSD-3-Clause</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><b>注意</b>Inria 官方 3DGS 光栅化器和 nvdiffrast 的许可证都限制商用，不要引入生产流水线。可微渲染在本方案中不是必需的，参数拟合用 CMA-ES 加光线投射即可。</div>
+</section>
+
+<section id="schedule">
+  <h2><span class="n">14</span>调试排期</h2>
+  <p>按一人全职估算。每周末在固定测试集上跑全量，指标写入对比表。</p>
+  <div class="weeks">
+    <div class="week"><div class="d"><b>第 1 周</b>纹理快修与观测</div><ul><li>E0、E1：参数激活核对，纹理切换到 DC 颜色。</li><li>E2、E3：alpha 阈值和多视角一致性过滤，观测点云替代 TSDF。</li><li>搭好逐阶段可视化和人工遮挡测试。</li></ul></div>
+    <div class="week"><div class="d"><b>第 2 周</b>置信度与凳子</div><ul><li>E4：凹陷来源定位，按结果决定是否做边界回收。</li><li>E5：置信度三态，校准权重。</li><li>E6：凳子参数化模板跑通，达到第一个里程碑。</li></ul></div>
+    <div class="week"><div class="d"><b>第 3 周</b>对称投票与模板扩充</div><ul><li>路线 B 对称投票，在椅子和花盆上验证。</li><li>E7：确认规则物体关闭形变。</li><li>模板扩充到桌子、柜子、容器。</li></ul></div>
+    <div class="week"><div class="d"><b>第 4 周</b>纹理完善与稳定性</div><ul><li>E8、E9：取色方法定型，去光照和补全区补色。</li><li>门禁阈值校准，测试集全量通过率作为验收指标。</li><li>失败样本归类，更新诊断手册。</li></ul></div>
+  </div>
+  <div class="callout info"><b>本轮验收标准</b>固定测试集中，规则物体（凳、桌、柜、容器）G4、G5 门禁通过率达到 80% 以上；凳子样本无可见凹陷，多视角渲染无明显色差。达标后再推进实例拆分、场景级编排和 agent 修复回路。</div>
+</section>
+
+<section id="refs">
+  <h2><span class="n">15</span>参考资料</h2>
+  <ul class="sources">
+    <li>Kerbl et al., 3D Gaussian Splatting for Real-Time Radiance Field Rendering, SIGGRAPH 2023（球谐颜色表示、PLY 参数存储方式）</li>
+    <li>Huang et al., 2D Gaussian Splatting for Geometrically Accurate Radiance Fields, SIGGRAPH 2024（中位深度、深度失真问题）</li>
+    <li>Schönberger et al., Pixelwise View Selection for Unstructured Multi-View Stereo, ECCV 2016（多视角深度一致性过滤）</li>
+    <li>Mitra, Guibas, Pauly, Partial and Approximate Symmetry Detection for 3D Geometry, SIGGRAPH 2006（对称检测与对称投票）</li>
+    <li>Kazhdan &amp; Hoppe, Screened Poisson Surface Reconstruction, ToG 2013</li>
+    <li>Sorkine &amp; Alexa, As-Rigid-As-Possible Surface Modeling, SGP 2007</li>
+    <li>Hansen, The CMA Evolution Strategy: A Tutorial, 2016</li>
+    <li>Waechter, Moehrle, Goesele, Let There Be Color! Large-Scale Texturing of 3D Reconstructions, ECCV 2014（多视角纹理选择）</li>
+    <li>Lempitsky &amp; Ivanov, Seamless Mosaicing of Image-Based Texture Maps, CVPR 2007（全局色彩调平）</li>
+    <li>gsplat：github.com/nerfstudio-project/gsplat</li>
+    <li>Open3D：github.com/isl-org/Open3D　·　manifold：github.com/elalish/manifold　·　xatlas：github.com/jpcy/xatlas</li>
+    <li>trimesh：github.com/mikedh/trimesh　·　PyMeshLab：github.com/cnr-isti-vclab/PyMeshLab　·　pycma：github.com/CMA-ES/pycma</li>
+    <li>mvs-texturing：github.com/nmoehrle/mvs-texturing</li>
+  </ul>
+</section>
+</main>
+</div>
